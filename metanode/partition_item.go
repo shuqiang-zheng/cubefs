@@ -19,15 +19,15 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/cubefs/cubefs/proto"
-	"github.com/cubefs/cubefs/util/log"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
 	"reflect"
 	"strings"
 	"sync"
+
+	"github.com/cubefs/cubefs/proto"
+	"github.com/cubefs/cubefs/util/log"
 )
 
 // MetaItem defines the structure of the metadata operations.
@@ -320,7 +320,7 @@ func newMetaItemIterator(mp *metaPartition) (si *MetaItemIterator, err error) {
 		var err error
 		var raw []byte
 		for _, filename := range iter.filenames {
-			if raw, err = ioutil.ReadFile(path.Join(iter.fileRootDir, filename)); err != nil {
+			if raw, err = os.ReadFile(path.Join(iter.fileRootDir, filename)); err != nil {
 				produceError(err)
 				return
 			}

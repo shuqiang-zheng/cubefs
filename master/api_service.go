@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math"
 	"net/http"
 	"regexp"
@@ -4048,7 +4048,7 @@ func (m *Server) putDataPartitions(w http.ResponseWriter, r *http.Request) {
 	if err = r.ParseForm(); err != nil {
 		return
 	}
-	if body, err = ioutil.ReadAll(r.Body); err != nil {
+	if body, err = io.ReadAll(r.Body); err != nil {
 		return
 	}
 	if !m.cluster.partition.IsRaftLeader() {
@@ -4991,7 +4991,7 @@ func (m *Server) GetQuota(w http.ResponseWriter, r *http.Request) {
 // 		return
 // 	}
 
-// 	if body, err = ioutil.ReadAll(r.Body); err != nil {
+// 	if body, err = io.ReadAll(r.Body); err != nil {
 // 		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
 // 		return
 // 	}
