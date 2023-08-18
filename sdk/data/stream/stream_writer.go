@@ -394,7 +394,7 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 
 		replyPacket := new(Packet)
 		err = sc.Send(retry, reqPacket, func(conn *net.TCPConn) (error, bool) {
-			e := replyPacket.ReadFromConn(conn, proto.ReadDeadlineTime)
+			e := replyPacket.ReadFromConn(conn, proto.ReadDeadlineTime) // TODO
 			if e != nil {
 				log.LogWarnf("Stream Writer doOverwrite: ino(%v) failed to read from connect, req(%v) err(%v)", s.inode, reqPacket, e)
 				// Upon receiving TryOtherAddrError, other hosts will be retried.

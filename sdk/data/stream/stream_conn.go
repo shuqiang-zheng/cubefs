@@ -161,7 +161,7 @@ func (sc *StreamConn) sendToPartition(req *Packet, retry bool, getReply GetReply
 func (sc *StreamConn) sendToConn(conn *net.TCPConn, req *Packet, getReply GetReplyFunc) (err error) {
 	for i := 0; i < StreamSendMaxRetry; i++ {
 		log.LogDebugf("sendToConn: send to addr(%v), reqPacket(%v)", sc.currAddr, req)
-		err = req.WriteToConn(conn)
+		err = req.WriteToConn(conn) // TODO
 		if err != nil {
 			msg := fmt.Sprintf("sendToConn: failed to write to addr(%v) err(%v)", sc.currAddr, err)
 			log.LogWarn(msg)
