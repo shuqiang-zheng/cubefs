@@ -252,7 +252,7 @@ func (eh *ExtentHandler) sender() {
 
 			//log.LogDebugf("ExtentHandler sender: extent allocated, eh(%v) dp(%v) extID(%v) packet(%v)", eh, eh.dp, eh.extID, packet.GetUniqueLogId())
 
-			if err = packet.writeToConn(eh.conn); err != nil {
+			if err = packet.writeToConn(eh.conn); err != nil { // TODO
 				log.LogWarnf("sender writeTo: failed, eh(%v) err(%v) packet(%v)", eh, err, packet)
 				eh.setClosed()
 				eh.setRecovery()
@@ -312,7 +312,7 @@ func (eh *ExtentHandler) processReply(packet *Packet) {
 	}
 
 	reply := NewReply(packet.ReqID, packet.PartitionID, packet.ExtentID)
-	err := reply.ReadFromConn(eh.conn, proto.ReadDeadlineTime)
+	err := reply.ReadFromConn(eh.conn, proto.ReadDeadlineTime) // TODO
 	if err != nil {
 		eh.processReplyError(packet, err.Error())
 		return
@@ -600,11 +600,11 @@ func (eh *ExtentHandler) createExtent(dp *wrapper.DataPartition) (extID int, err
 	}()
 
 	p := NewCreateExtentPacket(dp, eh.inode)
-	if err = p.WriteToConn(conn); err != nil {
+	if err = p.WriteToConn(conn); err != nil { // TODO
 		return extID, errors.Trace(err, "createExtent: failed to WriteToConn, packet(%v) datapartionHosts(%v)", p, dp.Hosts[0])
 	}
 
-	if err = p.ReadFromConn(conn, proto.ReadDeadlineTime*2); err != nil {
+	if err = p.ReadFromConn(conn, proto.ReadDeadlineTime*2); err != nil { //TODO
 		return extID, errors.Trace(err, "createExtent: failed to ReadFromConn, packet(%v) datapartionHosts(%v)", p, dp.Hosts[0])
 	}
 

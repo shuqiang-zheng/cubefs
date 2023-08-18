@@ -142,10 +142,10 @@ func (p *Packet) isValidReadReply(q *Packet) bool {
 
 func (p *Packet) writeToConn(conn net.Conn) error {
 	p.CRC = crc32.ChecksumIEEE(p.Data[:p.Size])
-	return p.WriteToConn(conn)
+	return p.WriteToConn(conn) // TODO
 }
 
-func (p *Packet) readFromConn(c net.Conn, deadlineTime time.Duration) (err error) {
+func (p *Packet) readFromConn(c net.Conn, deadlineTime time.Duration) (err error) { // TODO
 	if deadlineTime != proto.NoReadDeadlineTime {
 		c.SetReadDeadline(time.Now().Add(deadlineTime * time.Second))
 	}
