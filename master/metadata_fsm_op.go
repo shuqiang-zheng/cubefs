@@ -773,8 +773,12 @@ func (c *Cluster) loadUidSpaceList(vol *Vol) (err error) {
 func (c *Cluster) loadMultiVersion(vol *Vol) (err error) {
 	key := MultiVerPrefix + strconv.FormatUint(vol.ID, 10)
 	result, err := c.fsm.store.SeekForPrefix([]byte(key))
-	if err != nil || len(result) == 0 {
+	if err != nil {
 		log.LogErrorf("action[loadMultiVersion] err %v", err)
+		return
+	}
+	if len(result) == 0 {
+		log.LogWarnf("action[loadMultiVersion] MultiVersion zero and do init")
 		return vol.VersionMgr.init(c)
 	}
 	for _, value := range result {
@@ -1284,6 +1288,7 @@ func (c *Cluster) loadDataNodes() (err error) {
 			dnv.ZoneName = DefaultZoneName
 		}
 		dataNode := newDataNode(dnv.Addr, dnv.ZoneName, c.Name)
+		dataNode.DpCntLimit = newDpCountLimiter(&c.cfg.MaxDpCntLimit)
 		dataNode.ID = dnv.ID
 		dataNode.NodeSetID = dnv.NodeSetID
 		dataNode.RdOnly = dnv.RdOnly

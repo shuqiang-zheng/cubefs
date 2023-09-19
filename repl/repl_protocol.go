@@ -275,6 +275,7 @@ func (rp *ReplProtocol) readPkgAndPrepare() (err error) {
 	}
 	//log.LogDebugf("action[readPkgAndPrepare] packet(%v) op %v from remote(%v) conn(%v) ",
 	//	request.GetUniqueLogId(), request.Opcode, rp.sourceConn.RemoteAddr().String(), rp.sourceConn)
+
 	if err = request.resolveFollowersAddr(); err != nil {
 		err = rp.putResponse(request)
 		return
@@ -405,7 +406,7 @@ func (rp *ReplProtocol) writeResponse(reply *Packet) {
 	if reply.IsErrPacket() {
 		err = fmt.Errorf(reply.LogMessage(ActionWriteToClient, rp.sourceConn.RemoteAddr().String(),
 			reply.StartT, fmt.Errorf(string(reply.Data[:reply.Size]))))
-		if reply.ResultCode == proto.OpNotExistErr {
+		if reply.ResultCode == proto.OpNotExistErr || reply.ResultCode == proto.ErrCodeVersionOpError {
 			log.LogInfof(err.Error())
 		} else {
 			log.LogErrorf(err.Error())
@@ -413,9 +414,6 @@ func (rp *ReplProtocol) writeResponse(reply *Packet) {
 		rp.Stop()
 	}
 	log.LogDebugf("try rsp opcode %v %v %v", rp.replId, reply.Opcode, rp.sourceConn)
-	if reply.Opcode == proto.OpTryWriteAppend || reply.Opcode == proto.OpSyncTryWriteAppend {
-		log.LogDebugf("try rsp opcode %v", reply.Opcode)
-	}
 	// execute the post-processing function
 	rp.postFunc(reply)
 	if !reply.NeedReply {
@@ -424,9 +422,7 @@ func (rp *ReplProtocol) writeResponse(reply *Packet) {
 		}
 		return
 	}
-	if reply.Opcode == proto.OpTryWriteAppend || reply.Opcode == proto.OpSyncTryWriteAppend {
-		log.LogDebugf("try rsp opcode %v", reply.Opcode)
-	}
+
 	if err = reply.WriteToConn(rp.sourceConn); err != nil {
 		err = fmt.Errorf(reply.LogMessage(ActionWriteToClient, fmt.Sprintf("local(%v)->remote(%v)", rp.sourceConn.LocalAddr().String(),
 			rp.sourceConn.RemoteAddr().String()), reply.StartT, err))

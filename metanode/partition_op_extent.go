@@ -17,12 +17,12 @@ package metanode
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/cubefs/cubefs/util/exporter"
 	"os"
 	"sort"
 
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/util/errors"
-	"github.com/cubefs/cubefs/util/exporter"
 	"github.com/cubefs/cubefs/util/log"
 )
 
@@ -181,7 +181,7 @@ type VerOpData struct {
 	VerList []*proto.VolVersionInfo
 }
 
-func (mp *metaPartition) checkVerList(masterListInfo *proto.VolVersionInfoList) (err error) {
+func (mp *metaPartition) checkVerList(masterListInfo *proto.VolVersionInfoList, sync bool) (err error) {
 	mp.multiVersionList.RLock()
 
 	verMapLocal := make(map[uint64]*proto.VolVersionInfo)
@@ -199,11 +199,15 @@ func (mp *metaPartition) checkVerList(masterListInfo *proto.VolVersionInfoList) 
 		log.LogDebugf("checkVerList. vol %v mp %v ver info %v", mp.config.VolName, mp.config.PartitionId, info2)
 		vms, exist := verMapMaster[info2.Ver]
 		if !exist {
-			warn := fmt.Sprintf("[checkVerList] vol %v mp %v not found %v in master list", mp.config.VolName, mp.config.PartitionId, info2.Ver)
-			exporter.Warning(warn)
-			log.LogWarn(warn)
-			needUpdate = true
-			continue
+			// To mitigate the blocking risk caused by the confirmation of the prepare version and the master version,
+			// a version in the prepare phase is preliminarily considered as a valid version.
+			if info2.Status != proto.VersionPrepare {
+				warn := fmt.Sprintf("[checkVerList] vol %v mp %v not found %v in master list", mp.config.VolName, mp.config.PartitionId, info2.Ver)
+				exporter.Warning(warn)
+				log.LogWarn(warn)
+				needUpdate = true
+				continue
+			}
 		}
 		if info2.Status != proto.VersionNormal && info2.Status != vms.Status {
 			log.LogWarnf("checkVerList. vol %v mp %v ver %v status abnormal %v", mp.config.VolName, mp.config.PartitionId, info2.Ver, info2.Status)
@@ -247,14 +251,14 @@ func (mp *metaPartition) checkVerList(masterListInfo *proto.VolVersionInfoList) 
 			lastSeq = VerList[i].Ver
 			return false
 		})
-		if err = mp.MultiVersionOp(proto.SyncAllVersionList, lastSeq, VerList); err != nil {
+		if err = mp.HandleVersionOp(proto.SyncAllVersionList, lastSeq, VerList, sync); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func (mp *metaPartition) MultiVersionOp(op uint8, verSeq uint64, verList []*proto.VolVersionInfo) (err error) {
+func (mp *metaPartition) HandleVersionOp(op uint8, verSeq uint64, verList []*proto.VolVersionInfo, sync bool) (err error) {
 
 	verData := &VerOpData{
 		Op:      op,
@@ -262,8 +266,16 @@ func (mp *metaPartition) MultiVersionOp(op uint8, verSeq uint64, verList []*prot
 		VerList: verList,
 	}
 	data, _ := json.Marshal(verData)
-	_, err = mp.submit(opFSMVersionOp, data)
-
+	if sync {
+		_, err = mp.submit(opFSMVersionOp, data)
+		return
+	}
+	select {
+	case mp.verUpdateChan <- data:
+		log.LogDebugf("mp %v verSeq %v op %v be pushed to queue", mp.config.PartitionId, verSeq, op)
+	default:
+		err = fmt.Errorf("mp %v version update channel full, verdata %v not be executed", mp.config.PartitionId, string(data))
+	}
 	return
 }
 

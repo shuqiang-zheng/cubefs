@@ -16,11 +16,10 @@ package datanode
 
 import (
 	"fmt"
-	"sync"
-	"time"
-
 	"math"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/raftstore"
@@ -58,7 +57,7 @@ func NewSpaceManager(dataNode *DataNode) *SpaceManager {
 	space.diskList = make([]string, 0)
 	space.partitions = make(map[uint64]*DataPartition)
 	space.stats = NewStats(dataNode.zoneName)
-	space.stopC = make(chan bool, 0)
+	space.stopC = make(chan bool)
 	space.dataNode = dataNode
 	space.diskUtils = make(map[string]*atomicutil.Float64)
 	go space.statUpdateScheduler()
@@ -75,7 +74,7 @@ func (manager *SpaceManager) Stop() {
 	close(manager.samplerDone)
 	// Parallel stop data partitions.
 	const maxParallelism = 128
-	var parallelism = int(math.Min(float64(maxParallelism), float64(len(manager.partitions))))
+	parallelism := int(math.Min(float64(maxParallelism), float64(len(manager.partitions))))
 	wg := sync.WaitGroup{}
 	partitionC := make(chan *DataPartition, parallelism)
 	wg.Add(1)
@@ -154,13 +153,13 @@ func (manager *SpaceManager) StartDiskSample() {
 }
 
 func (manager *SpaceManager) GetDiskUtils() map[string]float64 {
-	useds := make(map[string]float64)
+	utils := make(map[string]float64)
 	manager.diskMutex.RLock()
 	defer manager.diskMutex.RUnlock()
 	for device, used := range manager.diskUtils {
-		useds[device] = used.Load()
+		utils[device] = used.Load()
 	}
-	return useds
+	return utils
 }
 
 func (manager *SpaceManager) SetNodeID(nodeID uint64) {
@@ -182,6 +181,7 @@ func (manager *SpaceManager) GetClusterID() (clusterID string) {
 func (manager *SpaceManager) SetRaftStore(raftStore raftstore.RaftStore) {
 	manager.raftStore = raftStore
 }
+
 func (manager *SpaceManager) GetRaftStore() (raftStore raftstore.RaftStore) {
 	return manager.raftStore
 }
@@ -345,6 +345,7 @@ func (manager *SpaceManager) minPartitionCnt(decommissionedDisks []string) (d *D
 	d = minWeightDisk
 	return d
 }
+
 func (manager *SpaceManager) statUpdateScheduler() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -420,7 +421,6 @@ func (manager *SpaceManager) CreatePartition(request *proto.CreateDataPartitionR
 
 // DeletePartition deletes a partition based on the partition id.
 func (manager *SpaceManager) DeletePartition(dpID uint64) {
-
 	manager.partitionMutex.Lock()
 
 	dp := manager.partitions[dpID]

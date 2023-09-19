@@ -19,14 +19,15 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net"
+	"strings"
+
 	"github.com/cubefs/cubefs/depends/tiglabs/raft"
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/repl"
 	"github.com/cubefs/cubefs/storage"
 	"github.com/cubefs/cubefs/util/exporter"
 	"github.com/cubefs/cubefs/util/log"
-	"net"
-	"strings"
 )
 
 type RaftCmdItem struct {
@@ -159,14 +160,6 @@ func UnmarshalOldVersionRandWriteOpItem(raw []byte) (result *rndWrtOpItem, err e
 	return
 }
 
-func (dp *DataPartition) checkWriteErrs(errMsg string) (ignore bool) {
-	// file has been deleted when applying the raft log
-	if strings.Contains(errMsg, storage.ExtentHasBeenDeletedError.Error()) || strings.Contains(errMsg, storage.ExtentNotFoundError.Error()) {
-		return true
-	}
-	return false
-}
-
 // CheckLeader checks if itself is the leader during read
 func (dp *DataPartition) CheckLeader(request *repl.Packet, connect net.Conn) (err error) {
 	//  and use another getRaftLeaderAddr() to return the actual address
@@ -187,7 +180,6 @@ type ItemIterator struct {
 
 // NewItemIterator creates a new item iterator.
 func NewItemIterator(applyID uint64) *ItemIterator {
-
 	si := new(ItemIterator)
 	si.applyID = applyID
 	return si
@@ -200,7 +192,6 @@ func (si *ItemIterator) ApplyIndex() uint64 {
 
 // Close Closes the iterator.
 func (si *ItemIterator) Close() {
-	return
 }
 
 // Next returns the next item in the iterator.
@@ -212,15 +203,15 @@ func (si *ItemIterator) Next() (data []byte, err error) {
 }
 
 // ApplyRandomWrite random write apply
-func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (resp interface{}, err error) {
+func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (respStatus interface{}, err error) {
 	opItem := &rndWrtOpItem{}
-	resp = proto.OpOk
+	respStatus = proto.OpOk
 	defer func() {
 		if err == nil {
 			dp.uploadApplyID(raftApplyID)
 			log.LogDebug("action[ApplyRandomWrite] success!")
 		} else {
-			if resp == proto.OpExistErr { // for tryAppendWrite
+			if respStatus == proto.OpExistErr { // for tryAppendWrite
 				err = nil
 				log.LogDebugf("[ApplyRandomWrite] ApplyID(%v) Partition(%v)_Extent(%v)_ExtentOffset(%v)_Size(%v) apply err(%v) retry[20]",
 					raftApplyID, dp.partitionID, opItem.extentID, opItem.offset, opItem.size, err)
@@ -230,8 +221,8 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 				raftApplyID, dp.partitionID, opItem.extentID, opItem.offset, opItem.size, err)
 			log.LogErrorf("action[ApplyRandomWrite] failed err %v", err)
 			exporter.Warning(err.Error())
-			if resp == proto.OpOk {
-				resp = proto.OpDiskErr
+			if respStatus == proto.OpOk {
+				respStatus = proto.OpDiskErr
 			}
 			panic(newRaftApplyError(err))
 		}
@@ -252,7 +243,7 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 		dp.disk.allocCheckLimit(proto.FlowWriteType, uint32(opItem.size))
 		dp.disk.allocCheckLimit(proto.IopsWriteType, 1)
 
-		resp, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, storage.RandomWriteType, opItem.opcode == proto.OpSyncRandomWrite)
+		respStatus, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, storage.RandomWriteType, opItem.opcode == proto.OpSyncRandomWrite)
 		var syncWrite bool
 		writeType := storage.RandomWriteType
 		if opItem.opcode == proto.OpRandomWrite || opItem.opcode == proto.OpSyncRandomWrite {
@@ -271,7 +262,7 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 			syncWrite = true
 		}
 
-		resp, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, writeType, syncWrite)
+		respStatus, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, writeType, syncWrite)
 		if err == nil {
 			break
 		}
@@ -282,11 +273,12 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 			err = nil
 			return
 		}
-		if (opItem.opcode == proto.OpTryWriteAppend || opItem.opcode == proto.OpSyncTryWriteAppend) && resp == proto.OpTryOtherExtent {
+		if (opItem.opcode == proto.OpTryWriteAppend || opItem.opcode == proto.OpSyncTryWriteAppend) && respStatus == proto.OpTryOtherExtent {
 			err = nil
 			return
 		}
-		log.LogErrorf("[ApplyRandomWrite] ApplyID(%v) Partition(%v)_Extent(%v)_ExtentOffset(%v)_Size(%v) apply err(%v) retry(%v)", raftApplyID, dp.partitionID, opItem.extentID, opItem.offset, opItem.size, err, i)
+		log.LogErrorf("[ApplyRandomWrite] ApplyID(%v) Partition(%v)_Extent(%v)_ExtentOffset(%v)_Size(%v) apply err(%v) retry(%v)",
+			raftApplyID, dp.partitionID, opItem.extentID, opItem.offset, opItem.size, err, i)
 	}
 
 	return
@@ -299,14 +291,49 @@ func (dp *DataPartition) RandomWriteSubmit(pkg *repl.Packet) (err error) {
 		log.LogErrorf("action[RandomWriteSubmit] [%v] marshal error %v", dp.partitionID, err)
 		return
 	}
-	var (
-		resp interface{}
-	)
+	var resp interface{}
 	resp, err = dp.Put(nil, val)
 	pkg.ResultCode, _ = resp.(uint8)
 	if err != nil {
 		log.LogErrorf("action[RandomWriteSubmit] submit err %v", err)
 		return
+	}
+	return
+}
+
+func (dp *DataPartition) CheckRandomWriteVer(p *repl.Packet) (err error) {
+	log.LogDebugf("action[CheckRandomWriteVer] opcod %v seq %v dpid %v dpseq %v extid %v", p.Opcode, p.VerSeq, p.PartitionID, dp.verSeq, p.ExtentID)
+	if dp.verSeq != p.VerSeq {
+		log.LogDebugf("action[CheckRandomWriteVer] opcod %v seq %v dpid %v dpseq %v extid %v", p.Opcode, p.VerSeq, p.PartitionID, dp.verSeq, p.ExtentID)
+		if p.Opcode == proto.OpSyncRandomWrite || p.Opcode == proto.OpRandomWrite {
+			err = fmt.Errorf("volume enable mulit version")
+			log.LogErrorf("action[CheckRandomWriteVer] error %v", err)
+			return
+		}
+		if p.VerSeq < dp.verSeq {
+			p.ExtentType |= proto.MultiVersionFlag
+			p.ExtentType |= proto.VersionListFlag
+
+			if p.Opcode == proto.OpRandomWriteVer || p.Opcode == proto.OpSyncRandomWriteVer {
+				err = storage.VerNotConsistentError
+				log.LogDebugf("action[CheckRandomWriteVer] dp %v client verSeq[%v] small than dataPartiton ver[%v]",
+					dp.config.PartitionID, p.VerSeq, dp.verSeq)
+			}
+
+			p.VerSeq = dp.verSeq
+			dp.volVersionInfoList.RLock()
+			p.VerList = dp.volVersionInfoList.VerList
+			dp.volVersionInfoList.RUnlock()
+			log.LogDebugf("action[CheckRandomWriteVer] partitionId %v reqId %v verList %v seq %v", p.PartitionID, p.ReqID, p.VerList, p.VerSeq)
+			return
+		} else if p.VerSeq > dp.verSeq {
+			log.LogDebugf("action[CheckRandomWriteVer] partitionId %v reqId %v verList (%v) seq %v old one(%v)",
+				p.PartitionID, p.ReqID, p.VerList, p.VerSeq, dp.volVersionInfoList.VerList)
+			dp.verSeq = p.VerSeq
+			dp.volVersionInfoList.Lock()
+			dp.volVersionInfoList.VerList = p.VerList
+			dp.volVersionInfoList.Unlock()
+		}
 	}
 	return
 }

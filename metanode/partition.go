@@ -92,7 +92,7 @@ type MetaPartitionConfig struct {
 	AfterStop     func()              `json:"-"`
 	RaftStore     raftstore.RaftStore `json:"-"`
 	ConnPool      *util.ConnectPool   `json:"-"`
-	Forbidden     bool                `json:"forbidden"`
+	Forbidden     bool                `json:"-"`
 }
 
 func (c *MetaPartitionConfig) checkMeta() (err error) {
@@ -211,12 +211,12 @@ type OpMultipart interface {
 
 // MultiVersion operation from master or client
 type OpMultiVersion interface {
-	MultiVersionOp(op uint8, verSeq uint64, verList []*proto.VolVersionInfo) (err error)
+	HandleVersionOp(op uint8, verSeq uint64, verList []*proto.VolVersionInfo, sync bool) (err error)
 	fsmVersionOp(reqData []byte) (err error)
 	GetAllVersionInfo(req *proto.MultiVersionOpRequest, p *Packet) (err error)
 	GetSpecVersionInfo(req *proto.MultiVersionOpRequest, p *Packet) (err error)
 	GetExtentByVer(ino *Inode, req *proto.GetExtentsRequest, rsp *proto.GetExtentsResponse)
-	checkVerList(info *proto.VolVersionInfoList) (err error)
+	checkVerList(info *proto.VolVersionInfoList, sync bool) (err error)
 }
 
 // OpMeta defines the interface for the metadata operations.
@@ -236,6 +236,7 @@ type OpMeta interface {
 type OpPartition interface {
 	GetVolName() (volName string)
 	GetVerSeq() uint64
+	GetVerList() []*proto.VolVersionInfo
 	IsLeader() (leaderAddr string, isLeader bool)
 	LeaderTerm() (leaderID, term uint64)
 	IsFollowerRead() bool
@@ -504,6 +505,7 @@ type metaPartition struct {
 	verSeq                 uint64
 	multiVersionList       *proto.VolVersionInfoList
 	versionLock            sync.Mutex
+	verUpdateChan          chan []byte
 }
 
 func (mp *metaPartition) IsForbidden() bool {
@@ -528,7 +530,7 @@ func (mp *metaPartition) acucumUidSizeByLoad(ino *Inode) {
 	mp.uidManager.accumInoUidSize(ino, mp.uidManager.accumBase)
 }
 
-func (mp *metaPartition) getVerList() []*proto.VolVersionInfo {
+func (mp *metaPartition) GetVerList() []*proto.VolVersionInfo {
 	mp.multiVersionList.RLock()
 	defer mp.multiVersionList.RUnlock()
 	return mp.multiVersionList.VerList
@@ -649,42 +651,8 @@ func (mp *metaPartition) Stop() {
 	}
 }
 
-func (mp *metaPartition) onStart(isCreate bool) (err error) {
-	defer func() {
-		if err == nil {
-			return
-		}
-		mp.onStop()
-	}()
-	mp.multiVersionList = &proto.VolVersionInfoList{}
-	if err = mp.load(isCreate); err != nil {
-		err = errors.NewErrorf("[onStart] load partition id=%d: %s",
-			mp.config.PartitionId, err.Error())
-		return
-	}
-	mp.startScheduleTask()
-	if err = mp.startFreeList(); err != nil {
-		err = errors.NewErrorf("[onStart] start free list id=%d: %s",
-			mp.config.PartitionId, err.Error())
-		return
-	}
-
-	// set EBS Client
-	if clusterInfo, err = masterClient.AdminAPI().GetClusterInfo(); err != nil {
-		log.LogErrorf("action[onStart] GetClusterInfo err[%v]", err)
-		return
-	}
-
-	var (
-		volumeInfo *proto.SimpleVolView
-		verList    *proto.VolVersionInfoList
-	)
-	if volumeInfo, err = masterClient.AdminAPI().GetVolumeSimpleInfo(mp.config.VolName); err != nil {
-		log.LogErrorf("action[onStart] GetVolumeSimpleInfo err[%v]", err)
-		return
-	}
-
-	mp.vol.volDeleteLockTime = volumeInfo.DeleteLockTime
+func (mp *metaPartition) versionInit(isCreate bool) (err error) {
+	var verList *proto.VolVersionInfoList
 	verList, err = masterClient.AdminAPI().GetVerList(mp.config.VolName)
 
 	if err != nil {
@@ -708,6 +676,50 @@ func (mp *metaPartition) onStart(isCreate bool) (err error) {
 	vlen := len(mp.multiVersionList.VerList)
 	if vlen > 0 {
 		mp.verSeq = mp.multiVersionList.VerList[vlen-1].Ver
+	}
+
+	go mp.runVersionOp()
+
+	return
+}
+
+func (mp *metaPartition) onStart(isCreate bool) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		mp.onStop()
+	}()
+	if err = mp.load(isCreate); err != nil {
+		err = errors.NewErrorf("[onStart] load partition id=%d: %s",
+			mp.config.PartitionId, err.Error())
+		return
+	}
+	mp.startScheduleTask()
+	if err = mp.startFreeList(); err != nil {
+		err = errors.NewErrorf("[onStart] start free list id=%d: %s",
+			mp.config.PartitionId, err.Error())
+		return
+	}
+
+	// set EBS Client
+	if clusterInfo, err = masterClient.AdminAPI().GetClusterInfo(); err != nil {
+		log.LogErrorf("action[onStart] GetClusterInfo err[%v]", err)
+		return
+	}
+
+	var (
+		volumeInfo *proto.SimpleVolView
+	)
+	if volumeInfo, err = masterClient.AdminAPI().GetVolumeSimpleInfo(mp.config.VolName); err != nil {
+		log.LogErrorf("action[onStart] GetVolumeSimpleInfo err[%v]", err)
+		return
+	}
+
+	mp.vol.volDeleteLockTime = volumeInfo.DeleteLockTime
+
+	if err = mp.versionInit(isCreate); err != nil {
+		return
 	}
 
 	mp.volType = volumeInfo.VolType
@@ -849,20 +861,21 @@ func (mp *metaPartition) getRaftPort() (heartbeat, replica int, err error) {
 // NewMetaPartition creates a new meta partition with the specified configuration.
 func NewMetaPartition(conf *MetaPartitionConfig, manager *metadataManager) MetaPartition {
 	mp := &metaPartition{
-		config:        conf,
-		dentryTree:    NewBtree(),
-		inodeTree:     NewBtree(),
-		extendTree:    NewBtree(),
-		multipartTree: NewBtree(),
-		stopC:         make(chan bool),
-		storeChan:     make(chan *storeMsg, 100),
-		freeList:      newFreeList(),
-		extDelCh:      make(chan []proto.ExtentKey, defaultDelExtentsCnt),
-		extReset:      make(chan struct{}),
-		vol:           NewVol(),
-		manager:       manager,
-		uniqChecker:   newUniqChecker(),
-		verSeq:        conf.VerSeq,
+		config:           conf,
+		dentryTree:       NewBtree(),
+		inodeTree:        NewBtree(),
+		extendTree:       NewBtree(),
+		multipartTree:    NewBtree(),
+		stopC:            make(chan bool),
+		storeChan:        make(chan *storeMsg, 100),
+		freeList:         newFreeList(),
+		extDelCh:         make(chan []proto.ExtentKey, defaultDelExtentsCnt),
+		extReset:         make(chan struct{}),
+		vol:              NewVol(),
+		manager:          manager,
+		uniqChecker:      newUniqChecker(),
+		verSeq:           conf.VerSeq,
+		multiVersionList: &proto.VolVersionInfoList{},
 	}
 	mp.txProcessor = NewTransactionProcessor(mp)
 	return mp
