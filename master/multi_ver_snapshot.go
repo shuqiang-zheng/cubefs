@@ -55,8 +55,8 @@ type VolVersionManager struct {
 	sync.RWMutex
 }
 
-func newVersionMgr(vol *Vol) *VolVersionManager {
-	return &VolVersionManager{
+func newVersionMgr(vol *Vol) (mgr *VolVersionManager) {
+	mgr = &VolVersionManager{
 		vol:    vol,
 		wait:   make(chan error, 1),
 		cancel: make(chan bool, 1),
@@ -65,6 +65,7 @@ func newVersionMgr(vol *Vol) *VolVersionManager {
 			metaNodeArray: new(sync.Map),
 		},
 	}
+	return
 }
 func (verMgr *VolVersionManager) String() string {
 	return fmt.Sprintf("mgr:{vol[%v],status[%v] verSeq [%v], prepareinfo [%v]}",
@@ -108,6 +109,11 @@ func (verMgr *VolVersionManager) CommitVer() (ver *proto.VolVersionInfo) {
 		}
 		verMgr.multiVersionList = append(verMgr.multiVersionList, commitVer)
 		verMgr.verSeq = ver.Ver
+		log.LogInfof("action[CommitVer] vol %v verseq %v exit", verMgr.vol.Name, verMgr.verSeq)
+		if err := verMgr.Persist(); err != nil {
+			log.LogErrorf("action[createVer2PhaseTask] vol %v err %v", verMgr.vol.Name, err)
+			return
+		}
 		log.LogDebugf("action[CommitVer] vol %v ask mgr do commit in next step version %v", verMgr.vol.Name, ver)
 		verMgr.wait <- nil
 	} else if verMgr.prepareCommit.op == proto.DeleteVersion {
@@ -122,7 +128,6 @@ func (verMgr *VolVersionManager) CommitVer() (ver *proto.VolVersionInfo) {
 	} else {
 		log.LogErrorf("action[CommitVer] vol %v with seq %v wrong step", verMgr.vol.Name, verMgr.prepareCommit.prepareInfo.Ver)
 	}
-	log.LogInfof("action[CommitVer] vol %v verseq %v exit", verMgr.vol.Name, verMgr.verSeq)
 	return
 }
 
@@ -205,17 +210,20 @@ func (verMgr *VolVersionManager) SetVerStrategy(strategy proto.VolumeVerStrategy
 
 func (verMgr *VolVersionManager) checkCreateStrategy() {
 	verMgr.RLock()
-	defer verMgr.RUnlock()
-
 	log.LogDebugf("checkSnapshotStrategy enter")
 	if len(verMgr.multiVersionList)-1 > verMgr.strategy.KeepVerCnt {
+		verMgr.RUnlock()
 		return
 	}
+	verMgr.RUnlock()
+
 	curTime := time.Now()
 	if verMgr.strategy.TimeUp(curTime) {
 		log.LogDebugf("checkSnapshotStrategy.vol %v try create snapshot", verMgr.vol.Name)
 		if _, err := verMgr.createVer2PhaseTask(verMgr.c, uint64(time.Now().UnixMicro()), proto.CreateVersion, verMgr.strategy.ForceUpdate); err != nil {
+			verMgr.RLock()
 			verEle := verMgr.multiVersionList[len(verMgr.multiVersionList)-1]
+			verMgr.RUnlock()
 			if int64(verEle.Ver)/1e6+int64(verMgr.strategy.GetPeriodicSecond()) < curTime.Unix() {
 				msg := fmt.Sprintf("[checkSnapshotStrategy] last version %v status %v for %v hours than 2times periodic", verEle.Ver, verEle.Status, 2*verMgr.strategy.Periodic)
 				Warn(verMgr.c.Name, msg)
@@ -229,8 +237,6 @@ func (verMgr *VolVersionManager) checkCreateStrategy() {
 
 func (verMgr *VolVersionManager) checkDeleteStrategy() {
 	verMgr.RLock()
-	defer verMgr.RUnlock()
-
 	log.LogDebugf("checkSnapshotStrategy.vol %v try delete snapshot nLen %v, keep cnt %v", verMgr.vol.Name, len(verMgr.multiVersionList)-1, verMgr.strategy.KeepVerCnt)
 	nLen := len(verMgr.multiVersionList)
 	log.LogDebugf("checkSnapshotStrategy.vol %v try delete snapshot nLen %v, keep cnt %v", verMgr.vol.Name, len(verMgr.multiVersionList)-1, verMgr.strategy.KeepVerCnt)
@@ -253,6 +259,7 @@ func (verMgr *VolVersionManager) checkDeleteStrategy() {
 		}
 		return
 	}
+	verMgr.RUnlock()
 }
 
 func (verMgr *VolVersionManager) UpdateVerStatus(verSeq uint64, status uint8) (err error) {
@@ -391,7 +398,7 @@ func (verMgr *VolVersionManager) createTaskToDataNode(cluster *Cluster, verSeq u
 		verMgr.prepareCommit.nodeCnt++
 		log.LogInfof("action[createTaskToDataNode] volume %v addr %v op %v verseq %v nodeCnt %v",
 			verMgr.vol.Name, addr.(string), op, verSeq, verMgr.prepareCommit.nodeCnt)
-		task := node.createVersionTask(verMgr.vol.Name, verSeq, op, addr.(string))
+		task := node.createVersionTask(verMgr.vol.Name, verSeq, op, addr.(string), verMgr.multiVersionList)
 		tasks = append(tasks, task)
 		return true
 	})
@@ -442,7 +449,7 @@ func (verMgr *VolVersionManager) createTaskToMetaNode(cluster *Cluster, verSeq u
 		log.LogInfof("action[createTaskToMetaNode] volume %v addr %v op %v verseq %v nodeCnt %v",
 			verMgr.vol.Name, addr.(string), op, verSeq, verMgr.prepareCommit.nodeCnt)
 		verMgr.prepareCommit.metaNodeArray.Store(node.Addr, TypeNoReply)
-		task := node.createVersionTask(verMgr.vol.Name, verSeq, op, addr.(string))
+		task := node.createVersionTask(verMgr.vol.Name, verSeq, op, addr.(string), verMgr.multiVersionList)
 		tasks = append(tasks, task)
 		return true
 	})

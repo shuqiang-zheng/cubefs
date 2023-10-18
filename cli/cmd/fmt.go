@@ -756,10 +756,10 @@ func formatDataNodeDetail(dn *proto.DataNodeInfo, rowTable bool) string {
 	sb.WriteString(fmt.Sprintf("  Partition count     : %v\n", dn.DataPartitionCount))
 	sb.WriteString(fmt.Sprintf("  Bad disks           : %v\n", dn.BadDisks))
 	sb.WriteString(fmt.Sprintf("  Persist partitions  : %v\n", dn.PersistenceDataPartitions))
-	sb.WriteString(fmt.Sprintf("  CpuUtil             : %.1f\n", dn.CpuUtil))
+	sb.WriteString(fmt.Sprintf("  CpuUtil             : %.1f%%\n", dn.CpuUtil))
 	sb.WriteString("  IoUtils              :\n")
 	for device, used := range dn.IoUtils {
-		sb.WriteString(fmt.Sprintf("                       %v:%.1f\n", device, used))
+		sb.WriteString(fmt.Sprintf("                       %v:%.1f%%\n", device, used))
 	}
 	return sb.String()
 }
@@ -881,12 +881,12 @@ func formatQuotaInfo(info *proto.QuotaInfo) string {
 	return ret
 }
 
-var badDiskDetailTableRowPattern = "%-18v    %-24v"
+var badDiskDetailTableRowPattern = "%-18v    %-18v    %-18v    %-18v    %-18v"
 
 func formatBadDiskTableHeader() string {
-	return fmt.Sprintf(badDiskDetailTableRowPattern, "ADDRESS", "PATH")
+	return fmt.Sprintf(badDiskDetailTableRowPattern, "Address", "Path", "TotalPartitionCnt", "DiskErrPartitionCnt", "DiskErrPartitionList")
 }
 
 func formatBadDiskInfoRow(disk proto.BadDiskInfo) string {
-	return fmt.Sprintf(badDiskDetailTableRowPattern, disk.Address, disk.Path)
+	return fmt.Sprintf(badDiskDetailTableRowPattern, disk.Address, disk.Path, disk.TotalPartitionCnt, len(disk.DiskErrPartitionList), disk.DiskErrPartitionList)
 }

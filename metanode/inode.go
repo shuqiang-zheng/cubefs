@@ -19,13 +19,16 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/cubefs/cubefs/util/log"
 	"io"
+	syslog "log"
 	"math"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/cubefs/cubefs/proto"
+	"github.com/cubefs/cubefs/util/log"
+	"github.com/cubefs/cubefs/util/timeutil"
 )
 
 const (
@@ -116,7 +119,7 @@ func NewMultiSnap(seq uint64) *InodeMultiSnap {
 	}
 }
 
-func (i *Inode) setVer(seq uint64) {
+func (i *Inode) setVerDoWork(seq uint64) {
 	if seq == 0 && i.multiSnap == nil {
 		return
 	}
@@ -125,6 +128,18 @@ func (i *Inode) setVer(seq uint64) {
 	} else {
 		i.multiSnap.verSeq = seq
 	}
+}
+
+func (i *Inode) setVerNoCheck(seq uint64) {
+	i.setVerDoWork(seq)
+}
+
+func (i *Inode) setVer(seq uint64) {
+	if i.getVer() > seq {
+		syslog.Println(fmt.Sprintf("inode %v old seq %v cann't use seq %v", i.getVer(), seq, string(debug.Stack())))
+		log.LogFatalf("inode %v old seq %v cann't use seq %v", i.getVer(), seq, string(debug.Stack()))
+	}
+	i.setVerDoWork(seq)
 }
 
 func (i *Inode) insertEkRefMap(mpId uint64, ek *proto.ExtentKey) {
@@ -393,7 +408,7 @@ func (i *Inode) String() string {
 // NewInode returns a new Inode instance with specified Inode ID, name and type.
 // The AccessTime and ModifyTime will be set to the current time.
 func NewInode(ino uint64, t uint32) *Inode {
-	ts := Now.GetCurrentTimeUnix()
+	ts := timeutil.GetCurrentTimeUnix()
 	i := &Inode{
 		Inode:      ino,
 		Type:       t,
@@ -684,17 +699,18 @@ func (i *Inode) MarshalValue() (val []byte) {
 	var err error
 	buff := bytes.NewBuffer(make([]byte, 0, 128))
 	buff.Grow(64)
-	i.RLock()
 
-	//	log.LogInfof("action[MarshalValue] inode %v current verseq %v, hist len (%v)", i.Inode, i.verSeq, i.getLayerLen())
+	i.RLock()
 	i.MarshalInodeValue(buff)
+	if i.getLayerLen() > 0 && i.getVer() == 0 {
+		log.LogFatalf("action[MarshalValue] inode %v current verseq %v, hist len (%v) stack(%v)", i.Inode, i.getVer(), i.getLayerLen(), string(debug.Stack()))
+	}
 	if err = binary.Write(buff, binary.BigEndian, int32(i.getLayerLen())); err != nil {
 		panic(err)
 	}
 
 	if i.multiSnap != nil {
 		for _, ino := range i.multiSnap.multiVersions {
-			//	log.LogInfof("action[MarshalValue] inode %v current verseq %v", ino.Inode, ino.verSeq)
 			ino.MarshalInodeValue(buff)
 		}
 	}
@@ -1038,10 +1054,10 @@ func (inode *Inode) unlinkTopLayer(mpId uint64, ino *Inode, mpVer uint64, verlis
 		var dIno *Inode
 		if ext2Del, dIno = inode.getAndDelVer(mpId, ino.getVer(), mpVer, verlist); dIno == nil {
 			status = proto.OpNotExistErr
-			log.LogDebugf("action[unlinkTopLayer] ino %v", ino)
+			log.LogDebugf("action[unlinkTopLayer] mp %v iino %v", mpId, ino)
 			return true
 		}
-		log.LogDebugf("action[unlinkTopLayer] inode %v be unlinked, File restore, multiSnap.ekRefMap %v", ino.Inode, inode.multiSnap.ekRefMap)
+		log.LogDebugf("action[unlinkTopLayer] mp %v inode %v be unlinked", mpId, ino.Inode)
 		dIno.DecNLink() // dIno should be inode
 		doMore = true
 		return
@@ -1061,8 +1077,8 @@ func (inode *Inode) unlinkTopLayer(mpId uint64, ino *Inode, mpVer uint64, verlis
 			return
 		}
 
-		log.LogDebugf("action[unlinkTopLayer] need restore.ino %v withSeq %v equal mp seq, verlist %v multiSnap.ekRefMap %v",
-			ino, inode.getVer(), verlist, inode.multiSnap.ekRefMap)
+		log.LogDebugf("action[unlinkTopLayer] need restore.ino %v withSeq %v equal mp seq, verlist %v",
+			ino, inode.getVer(), verlist)
 		// need restore
 		if !proto.IsDir(inode.Type) {
 			delFunc()
@@ -1103,7 +1119,6 @@ func (inode *Inode) unlinkTopLayer(mpId uint64, ino *Inode, mpVer uint64, verlis
 		log.LogDebugf("action[unlinkTopLayer] inode %v be unlinked, File create ver 1st layer", ino.Inode)
 	}
 	return
-
 }
 
 func (inode *Inode) dirUnlinkVerInlist(ino *Inode, mpVer uint64, verlist *proto.VolVersionInfoList) (ext2Del []proto.ExtentKey, doMore bool, status uint8) {
@@ -1227,7 +1242,7 @@ func (i *Inode) getLastestVer(reqVerSeq uint64, commit bool, verlist *proto.VolV
 	return 0, false
 }
 
-func (i *Inode) ShouldDelVer(mpVer uint64, delVer uint64) (ok bool, err error) {
+func (i *Inode) ShouldDelVer(delVer uint64, mpVer uint64) (ok bool, err error) {
 	if i.getVer() == 0 {
 		if delVer > 0 {
 			if isInitSnapVer(delVer) {
@@ -1276,8 +1291,6 @@ func (ino *Inode) getInoByVer(verSeq uint64, equal bool) (i *Inode, idx int) {
 	ino.RLock()
 	defer ino.RUnlock()
 
-	log.LogDebugf("action[getInoByVer] ino %v verseq %v hist len %v request ino ver %v",
-		ino.Inode, ino.getVer(), ino.getLayerLen(), verSeq)
 	if verSeq == 0 || verSeq == ino.getVer() || (isInitSnapVer(verSeq) && ino.getVer() == 0) {
 		return ino, 0
 	}
@@ -1398,7 +1411,7 @@ func (i *Inode) getAndDelVer(mpId uint64, dVer uint64, mpVer uint64, verlist *pr
 					i.Inode, i.multiSnap.multiVersions[id].getVer(), nVerSeq, dVer)
 
 				i.multiSnap.multiVersions[id].setVer(nVerSeq)
-				delExtents, ino = i.MultiLayerClearExtByVer(id, nVerSeq), i.multiSnap.multiVersions[id]
+				delExtents, ino = i.MultiLayerClearExtByVer(id+1, nVerSeq), i.multiSnap.multiVersions[id]
 				if len(i.multiSnap.multiVersions[id].Extents.eks) != 0 {
 					log.LogDebugf("action[getAndDelVer] ino %v   after clear self still have ext and left", i.Inode)
 					return
@@ -1496,10 +1509,10 @@ func (i *Inode) SplitExtentWithCheck(param *AppendExtParam) (delExtents []proto.
 
 	var err error
 	param.ek.SetSeq(param.reqVer)
-	log.LogDebugf("action[SplitExtentWithCheck] inode %v,ver %v,ek %v,hist len %v", i.Inode, param.reqVer, param.ek, i.getLayerLen())
+	log.LogDebugf("action[SplitExtentWithCheck] mpId[%v].inode %v,ver %v,ek %v,hist len %v", param.mpId, i.Inode, param.reqVer, param.ek, i.getLayerLen())
 
 	if param.reqVer != i.getVer() {
-		log.LogDebugf("action[SplitExtentWithCheck] CreateVer ver %v", param.reqVer)
+		log.LogDebugf("action[SplitExtentWithCheck] mpId[%v].CreateVer ver %v", param.mpId, param.reqVer)
 		i.CreateVer(param.reqVer)
 	}
 	i.Lock()
@@ -1508,7 +1521,7 @@ func (i *Inode) SplitExtentWithCheck(param *AppendExtParam) (delExtents []proto.
 	i.buildMultiSnap()
 	delExtents, status = i.Extents.SplitWithCheck(param.mpId, i.Inode, param.ek, i.multiSnap.ekRefMap)
 	if status != proto.OpOk {
-		log.LogErrorf("action[SplitExtentWithCheck] status %v", status)
+		log.LogErrorf("action[SplitExtentWithCheck] mpId[%v].status %v", param.mpId, status)
 		return
 	}
 	if len(delExtents) == 0 {
@@ -1520,7 +1533,7 @@ func (i *Inode) SplitExtentWithCheck(param *AppendExtParam) (delExtents []proto.
 	}
 
 	if delExtents, err = i.RestoreExts2NextLayer(param.mpId, delExtents, param.mpVer, 0); err != nil {
-		log.LogErrorf("action[fsmAppendExtentWithCheck] ino %v RestoreMultiSnapExts split error %v", i.Inode, err)
+		log.LogErrorf("action[fsmAppendExtentWithCheck] mpId[%v].ino %v RestoreMultiSnapExts split error %v", param.mpId, i.Inode, err)
 		return
 	}
 	if proto.IsHot(param.volType) {
@@ -1586,11 +1599,11 @@ type AppendExtParam struct {
 func (i *Inode) AppendExtentWithCheck(param *AppendExtParam) (delExtents []proto.ExtentKey, status uint8) {
 
 	param.ek.SetSeq(param.mpVer)
-	log.LogDebugf("action[AppendExtentWithCheck] mpVer %v inode %v and fsm ver %v,req ver %v,ek %v,hist len %v",
-		param.mpVer, i.Inode, i.getVer(), param.reqVer, param.ek, i.getLayerLen())
+	log.LogDebugf("action[AppendExtentWithCheck] mpId[%v].mpVer %v inode %v and fsm ver %v,req ver %v,ek %v,hist len %v",
+		param.mpId, param.mpVer, i.Inode, i.getVer(), param.reqVer, param.ek, i.getLayerLen())
 
 	if param.mpVer != i.getVer() {
-		log.LogDebugf("action[AppendExtentWithCheck] ver %v inode ver %v", param.reqVer, i.getVer())
+		log.LogDebugf("action[AppendExtentWithCheck] mpId[%v].ver %v inode ver %v", param.mpId, param.reqVer, i.getVer())
 		i.CreateVer(param.mpVer)
 	}
 
@@ -1600,7 +1613,7 @@ func (i *Inode) AppendExtentWithCheck(param *AppendExtParam) (delExtents []proto
 	refFunc := func(key *proto.ExtentKey) { i.insertEkRefMap(param.mpId, key) }
 	delExtents, status = i.Extents.AppendWithCheck(i.Inode, param.ek, refFunc, param.discardExtents)
 	if status != proto.OpOk {
-		log.LogErrorf("action[AppendExtentWithCheck] status %v", status)
+		log.LogErrorf("action[AppendExtentWithCheck] mpId[%v].status %v", param.mpId, status)
 		return
 	}
 
@@ -1611,7 +1624,7 @@ func (i *Inode) AppendExtentWithCheck(param *AppendExtParam) (delExtents []proto
 			return
 		}
 		if delExtents, err = i.RestoreExts2NextLayer(param.mpId, delExtents, param.mpVer, 0); err != nil {
-			log.LogErrorf("action[AppendExtentWithCheck] RestoreMultiSnapExts err %v", err)
+			log.LogErrorf("action[AppendExtentWithCheck] mpId[%v].RestoreMultiSnapExts err %v", param.mpId, err)
 			return nil, proto.OpErr
 		}
 	}
@@ -1839,7 +1852,7 @@ func (i *Inode) DoReadFunc(fn func()) {
 
 // SetMtime sets mtime to the current time.
 func (i *Inode) SetMtime() {
-	mtime := Now.GetCurrentTimeUnix()
+	mtime := timeutil.GetCurrentTimeUnix()
 	i.Lock()
 	defer i.Unlock()
 	i.ModifyTime = mtime

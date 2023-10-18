@@ -29,6 +29,8 @@ type Config struct {
 	ChunkBits uint `json:"chunkbits"`
 	// BodyLimit negative means no body-cache, 0 means default buffer size.
 	BodyLimit int `json:"bodylimit"`
+	// No2xxBody means that the response body of 2xx will not be logged.
+	No2xxBody bool `json:"no_2xx_body"`
 	// rotate new audit log file every start time
 	RotateNew     bool   `json:"rotate_new"`
 	LogFileSuffix string `json:"log_file_suffix"`
@@ -36,8 +38,8 @@ type Config struct {
 	Backup       int              `json:"backup"`
 	MetricConfig PrometheusConfig `json:"metric_config"`
 
-	// KeywordsFilter log filter based on uri and request method
-	KeywordsFilter []string `json:"keywords_filter"`
+	// Filters are or relations
+	Filters []FilterConfig `json:"filters"`
 
 	// LogFormat valid value is "text" or "json", default is "text"
 	LogFormat string `json:"log_format"`
@@ -63,4 +65,8 @@ type MetricSender interface {
 
 type Decoder interface {
 	DecodeReq(req *http.Request) *DecodedReq
+}
+
+type ResponseExtraHeader interface {
+	ExtraHeader() http.Header
 }

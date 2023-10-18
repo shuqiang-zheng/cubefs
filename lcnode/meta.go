@@ -18,9 +18,10 @@ import "github.com/cubefs/cubefs/proto"
 
 type MetaWrapper interface {
 	ReadDirLimitForSnapShotClean(parentID uint64, from string, limit uint64, verSeq uint64, isDir bool) ([]proto.Dentry, error)
-	Delete_Ver_ll(parentID uint64, name string, isDir bool, verSeq uint64) (*proto.InodeInfo, error)
+	Delete_Ver_ll(parentID uint64, name string, isDir bool, verSeq uint64, fullPath string) (*proto.InodeInfo, error)
 	Lookup_ll(parentID uint64, name string) (inode uint64, mode uint32, err error)
 	BatchInodeGet(inodes []uint64) []*proto.InodeInfo
-	BatchDelete_ll(dentries []*proto.ScanDentry)
+	DeleteWithCond_ll(parentID, cond uint64, name string, isDir bool, fullPath string) (inode *proto.InodeInfo, err error)
+	Evict(inode uint64, fullPath string) error
 	ReadDirLimit_ll(parentID uint64, from string, limit uint64) ([]proto.Dentry, error)
 }

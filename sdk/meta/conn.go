@@ -102,7 +102,7 @@ sendWithList:
 		mw.putConn(mc, err)
 		goto out
 	}
-	if resp.ShouldRetryWithVersionList() {
+	if resp != nil && resp.ShouldRetryWithVersionList() {
 		// already send with list, must be a issue happened
 		if req.ExtentType&proto.VersionListFlag == proto.VersionListFlag {
 			mw.putConn(mc, err)
@@ -110,11 +110,10 @@ sendWithList:
 		}
 		req.ExtentType |= proto.VersionListFlag
 		req.VerList = mw.Client.GetVerMgr().VerList
+		log.LogWarnf("sendToMetaPartition: leader failed and goto retry, req(%v) mp(%v) mc(%v) err(%v) resp(%v)", req, mp, mc, err, resp)
 		goto sendWithList
 	}
 	mw.putConn(mc, err)
-	log.LogWarnf("sendToMetaPartition: leader failed and goto retry, req(%v) mp(%v) mc(%v) err(%v) resp(%v)", req, mp, mc, err, resp)
-
 retry:
 	start = time.Now()
 	for i := 0; i <= SendRetryLimit; i++ {

@@ -177,6 +177,7 @@ func newVol(vv volValue) (vol *Vol) {
 	}
 	vol.qosManager.volUpdateMagnify(magnifyQosVal)
 	vol.DpReadOnlyWhenVolFull = vv.DpReadOnlyWhenVolFull
+	vol.CheckStrategy()
 	return
 }
 
@@ -199,6 +200,40 @@ func newVolFromVolValue(vv *volValue) (vol *Vol) {
 	}
 	vol.Forbidden = vv.Forbidden
 	return vol
+}
+
+func (vol *Vol) CheckStrategy() {
+	//make sure resume all the processing ver deleting tasks before checking
+	waitTime := time.Second * defaultIntervalToCheck
+	waited := false
+
+	go func() {
+		for {
+			if vol.Status == markDelete {
+				break
+			}
+			if vol.VersionMgr.c != nil && vol.VersionMgr.c.IsLeader() {
+				if !waited {
+					log.LogInfof("wait for %v seconds once after becoming leader to make sure all the ver deleting tasks are resumed",
+						waitTime)
+					time.Sleep(waitTime)
+					waited = true
+				}
+				if !proto.IsHot(vol.VolType) {
+					return
+				}
+				vol.VersionMgr.RLock()
+				if vol.VersionMgr.strategy.GetPeriodicSecond() == 0 || vol.VersionMgr.strategy.Enable == false { // strategy not be set
+					vol.VersionMgr.RUnlock()
+					continue
+				}
+				vol.VersionMgr.RUnlock()
+				vol.VersionMgr.checkCreateStrategy()
+				vol.VersionMgr.checkDeleteStrategy()
+			}
+			time.Sleep(waitTime)
+		}
+	}()
 }
 
 func (vol *Vol) getPreloadCapacity() uint64 {
@@ -518,7 +553,7 @@ func (vol *Vol) checkMetaPartitions(c *Cluster) {
 			nextStart := mp.MaxInodeID + metaPartitionInodeIdStep
 			log.LogInfof(c.Name, fmt.Sprintf("cluster[%v],vol[%v],meta partition[%v] splits start[%v] maxinodeid:[%v] default step:[%v],nextStart[%v]",
 				c.Name, vol.Name, mp.PartitionID, mp.Start, mp.MaxInodeID, metaPartitionInodeIdStep, nextStart))
-			if err = vol.splitMetaPartition(c, mp, nextStart, metaPartitionInodeIdStep); err != nil {
+			if err = vol.splitMetaPartition(c, mp, nextStart, metaPartitionInodeIdStep, false); err != nil {
 				Warn(c.Name, fmt.Sprintf("cluster[%v],vol[%v],meta partition[%v] splits failed,err[%v]", c.Name, vol.Name, mp.PartitionID, err))
 			}
 		}
@@ -542,7 +577,7 @@ func (vol *Vol) checkSplitMetaPartition(c *Cluster, metaPartitionInodeStep uint6
 	// Any of the following conditions will trigger max mp split
 	// 1. The memory of the metanode which max mp belongs to reaches the threshold
 	// 2. The number of inodes managed by max mp reaches the threshold(0.75)
-	// 3. The number of RW mp is less than 2
+	// 3. The number of RW mp is less than 3
 	maxMPInodeUsedRatio := float64(maxMP.MaxInodeID-maxMP.Start) / float64(metaPartitionInodeStep)
 	RWMPNum, isHeartBeatDone := vol.getRWMetaPartitionNum()
 	if !isHeartBeatDone {
@@ -555,7 +590,7 @@ func (vol *Vol) checkSplitMetaPartition(c *Cluster, metaPartitionInodeStep uint6
 		if RWMPNum < lowerLimitRWMetaPartition {
 			end = maxMP.MaxInodeID + metaPartitionInodeStep
 		}
-		if err := vol.splitMetaPartition(c, maxMP, end, metaPartitionInodeStep); err != nil {
+		if err := vol.splitMetaPartition(c, maxMP, end, metaPartitionInodeStep, true); err != nil {
 			msg := fmt.Sprintf("action[checkSplitMetaPartition],split meta maxMP[%v] failed,err[%v]\n",
 				maxMP.PartitionID, err)
 			Warn(c.Name, msg)
@@ -1135,11 +1170,11 @@ func (vol *Vol) String() string {
 		vol.Name, vol.dpReplicaNum, vol.mpReplicaNum, vol.Capacity, vol.Status)
 }
 
-func (vol *Vol) doSplitMetaPartition(c *Cluster, mp *MetaPartition, end uint64, metaPartitionInodeIdStep uint64) (nextMp *MetaPartition, err error) {
+func (vol *Vol) doSplitMetaPartition(c *Cluster, mp *MetaPartition, end uint64, metaPartitionInodeIdStep uint64, ignoreNoLeader bool) (nextMp *MetaPartition, err error) {
 	mp.Lock()
 	defer mp.Unlock()
 
-	if err = mp.canSplit(end, metaPartitionInodeIdStep); err != nil {
+	if err = mp.canSplit(end, metaPartitionInodeIdStep, ignoreNoLeader); err != nil {
 		return
 	}
 
@@ -1177,7 +1212,7 @@ func (vol *Vol) doSplitMetaPartition(c *Cluster, mp *MetaPartition, end uint64, 
 	return
 }
 
-func (vol *Vol) splitMetaPartition(c *Cluster, mp *MetaPartition, end uint64, metaPartitionInodeIdStep uint64) (err error) {
+func (vol *Vol) splitMetaPartition(c *Cluster, mp *MetaPartition, end uint64, metaPartitionInodeIdStep uint64, ignoreNoLeader bool) (err error) {
 	if c.DisableAutoAllocate {
 		err = errors.NewErrorf("cluster auto allocate is disable")
 		return
@@ -1196,7 +1231,7 @@ func (vol *Vol) splitMetaPartition(c *Cluster, mp *MetaPartition, end uint64, me
 		return
 	}
 
-	nextMp, err := vol.doSplitMetaPartition(c, mp, end, metaPartitionInodeIdStep)
+	nextMp, err := vol.doSplitMetaPartition(c, mp, end, metaPartitionInodeIdStep, ignoreNoLeader)
 	if err != nil {
 		return
 	}

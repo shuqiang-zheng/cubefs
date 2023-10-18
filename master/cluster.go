@@ -17,7 +17,6 @@ package master
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"math"
 	"net/http"
 	"sort"
@@ -26,6 +25,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	authSDK "github.com/cubefs/cubefs/sdk/auth"
 	masterSDK "github.com/cubefs/cubefs/sdk/master"
@@ -404,6 +405,13 @@ const (
 func (c *Cluster) getHostFromDomainZone(domainId uint64, createType uint32, replicaNum uint8) (hosts []string, peers []proto.Peer, err error) {
 	hosts, peers, err = c.domainManager.getHostFromNodeSetGrp(domainId, replicaNum, createType)
 	return
+}
+
+func (c *Cluster) IsLeader() bool {
+	if c.partition != nil {
+		return c.partition.IsRaftLeader()
+	}
+	return false
 }
 
 func (c *Cluster) scheduleToManageDp() {
@@ -3094,12 +3102,12 @@ func (c *Cluster) createVol(req *createVolReq) (vol *Vol, err error) {
 
 		vol.Status = markDelete
 		if e := vol.deleteVolFromStore(c); e != nil {
-			log.LogErrorf("action[createVol] failed,vol[%v] err[%v]", vol.Name, e)
+			log.LogErrorf("action[createVol] deleteVolFromStore failed, vol[%v] err[%v]", vol.Name, e)
 		}
 
 		c.deleteVol(req.name)
 
-		err = fmt.Errorf("action[createVol] initMetaPartitions failed,err[%v]", err)
+		err = fmt.Errorf("action[createVol] initMetaPartitions failed, vol[%v] err[%v]", vol.Name, err)
 		goto errHandler
 	}
 
@@ -3107,14 +3115,26 @@ func (c *Cluster) createVol(req *createVolReq) (vol *Vol, err error) {
 		for retryCount := 0; readWriteDataPartitions < defaultInitMetaPartitionCount && retryCount < 3; retryCount++ {
 			err = vol.initDataPartitions(c)
 			if err != nil {
-				log.LogError("init dataPartition error", err.Error(), retryCount, len(vol.dataPartitions.partitionMap))
+				log.LogError("action[createVol] init dataPartition error ",
+					err.Error(), retryCount, len(vol.dataPartitions.partitionMap))
 			}
 
 			readWriteDataPartitions = len(vol.dataPartitions.partitionMap)
 		}
 
 		if len(vol.dataPartitions.partitionMap) < defaultInitMetaPartitionCount {
-			err = fmt.Errorf("action[createVol]  initDataPartitions failed, less than %d", defaultInitMetaPartitionCount)
+			err = fmt.Errorf("action[createVol] vol[%v] initDataPartitions failed, less than %d",
+				vol.Name, defaultInitMetaPartitionCount)
+
+			oldVolStatus := vol.Status
+			vol.Status = markDelete
+			if errSync := c.syncUpdateVol(vol); errSync != nil {
+				log.LogErrorf("action[createVol] vol[%v] after init dataPartition error, mark vol delete persist failed", vol.Name)
+				vol.Status = oldVolStatus
+			} else {
+				log.LogErrorf("action[createVol] vol[%v] mark vol delete after init dataPartition error", vol.Name)
+			}
+
 			goto errHandler
 		}
 	}
@@ -3122,7 +3142,7 @@ func (c *Cluster) createVol(req *createVolReq) (vol *Vol, err error) {
 	vol.dataPartitions.readableAndWritableCnt = readWriteDataPartitions
 	vol.updateViewCache(c)
 
-	log.LogInfof("action[createVol] vol[%v],readableAndWritableCnt[%v]", req.name, readWriteDataPartitions)
+	log.LogInfof("action[createVol] vol[%v], readableAndWritableCnt[%v]", req.name, readWriteDataPartitions)
 	return
 
 errHandler:
@@ -3253,7 +3273,7 @@ func (c *Cluster) updateInodeIDRange(volName string, start uint64) (err error) {
 	metaPartitionInodeIdStep := gConfig.MetaPartitionInodeIdStep
 	adjustStart = adjustStart + metaPartitionInodeIdStep
 	log.LogWarnf("vol[%v],maxMp[%v],start[%v],adjustStart[%v]", volName, maxPartitionID, start, adjustStart)
-	if err = vol.splitMetaPartition(c, partition, adjustStart, metaPartitionInodeIdStep); err != nil {
+	if err = vol.splitMetaPartition(c, partition, adjustStart, metaPartitionInodeIdStep, false); err != nil {
 		log.LogErrorf("action[updateInodeIDRange]  mp[%v] err[%v]", partition.PartitionID, err)
 	}
 	return
@@ -3483,6 +3503,10 @@ func (c *Cluster) getMonitorPushAddr() (addr string) {
 }
 
 func (c *Cluster) setMetaNodeThreshold(threshold float32) (err error) {
+	if threshold > 1.0 || threshold < 0.0 {
+		err = fmt.Errorf("set threshold failed: threshold (%v) should between 0.0 and 1.0", threshold)
+		return
+	}
 	oldThreshold := c.cfg.MetaNodeThreshold
 	c.cfg.MetaNodeThreshold = threshold
 	if err = c.syncPutCluster(); err != nil {
@@ -4340,7 +4364,6 @@ func (c *Cluster) scheduleToSnapshotDelVerScan() {
 					waited = true
 				}
 				c.getSnapshotDelVer()
-				c.checkSnapshotStrategy()
 			}
 			time.Sleep(waitTime)
 		}
@@ -4370,23 +4393,6 @@ func (c *Cluster) getSnapshotDelVer() {
 	log.LogDebug("getSnapshotDelVer AddVerInfo finish")
 	c.snapshotMgr.lcSnapshotTaskStatus.DeleteOldResult()
 	log.LogDebug("getSnapshotDelVer DeleteOldResult finish")
-}
-
-func (c *Cluster) checkSnapshotStrategy() {
-	vols := c.allVols()
-	for _, vol := range vols {
-		if !proto.IsHot(vol.VolType) {
-			continue
-		}
-		vol.VersionMgr.RLock()
-		if vol.VersionMgr.strategy.GetPeriodicSecond() == 0 || vol.VersionMgr.strategy.Enable == false { // strategy not be set
-			vol.VersionMgr.RUnlock()
-			continue
-		}
-		vol.VersionMgr.RUnlock()
-		vol.VersionMgr.checkCreateStrategy()
-		vol.VersionMgr.checkDeleteStrategy()
-	}
 }
 
 func (c *Cluster) SetBucketLifecycle(req *proto.LcConfiguration) error {

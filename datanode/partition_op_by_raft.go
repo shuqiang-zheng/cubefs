@@ -227,10 +227,6 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 			panic(newRaftApplyError(err))
 		}
 	}()
-	//if dp.IsRejectWrite() {
-	//	err = fmt.Errorf("partition(%v) disk(%v) err(%v)", dp.partitionID, dp.Disk().Path, syscall.ENOSPC)
-	//	return
-	//}
 
 	if opItem, err = UnmarshalRandWriteRaftLog(command); err != nil {
 		log.LogErrorf("[ApplyRandomWrite] ApplyID(%v) Partition(%v) unmarshal failed(%v)", raftApplyID, dp.partitionID, err)
@@ -243,7 +239,6 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 		dp.disk.allocCheckLimit(proto.FlowWriteType, uint32(opItem.size))
 		dp.disk.allocCheckLimit(proto.IopsWriteType, 1)
 
-		respStatus, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, storage.RandomWriteType, opItem.opcode == proto.OpSyncRandomWrite)
 		var syncWrite bool
 		writeType := storage.RandomWriteType
 		if opItem.opcode == proto.OpRandomWrite || opItem.opcode == proto.OpSyncRandomWrite {

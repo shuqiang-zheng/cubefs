@@ -19,8 +19,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+
 	"github.com/cubefs/cubefs/storage"
 	"github.com/cubefs/cubefs/util"
+	"github.com/cubefs/cubefs/util/timeutil"
+
 	"io"
 	"time"
 
@@ -69,11 +72,9 @@ func (mp *metaPartition) fsmTxCreateInode(txIno *TxInode, quotaIds []uint32) (st
 
 // Create and inode and attach it to the inode tree.
 func (mp *metaPartition) fsmCreateInode(ino *Inode) (status uint8) {
-	log.LogDebugf("action[fsmCreateInode] inode  %v be created", ino.Inode)
 	if status = mp.uidManager.addUidSpace(ino.Uid, ino.Inode, nil); status != proto.OpOk {
 		return
 	}
-	log.LogDebugf("action[fsmCreateInode] inode  %v be created", ino)
 
 	status = proto.OpOk
 	if _, ok := mp.inodeTree.ReplaceOrInsert(ino, false); !ok {
@@ -149,11 +150,7 @@ func (mp *metaPartition) getInodeByVer(ino *Inode) (i *Inode) {
 		log.LogDebugf("action[getInodeByVer] not found ino %v verseq %v", ino.Inode, ino.getVer())
 		return
 	}
-	log.LogDebugf("action[getInodeByVer] ino %v verseq %v hist len %v request ino ver %v",
-		ino.Inode, item.(*Inode).getVer(), item.(*Inode).getLayerLen(), ino.getVer())
 	i, _ = item.(*Inode).getInoByVer(ino.getVer(), false)
-
-	log.LogDebugf("action[getInodeByVer] ino %v verseq %v fin,i %v", ino.Inode, item.(*Inode).getVer(), i)
 	return
 }
 
@@ -168,7 +165,7 @@ func (mp *metaPartition) getInodeTopLayer(ino *Inode) (resp *InodeResponse) {
 		return
 	}
 	i := item.(*Inode)
-	ctime := Now.GetCurrentTime().Unix()
+	ctime := timeutil.GetCurrentTimeUnix()
 	/*
 	 * FIXME: not protected by lock yet, since nothing is depending on atime.
 	 * Shall add inode lock in the future.
@@ -192,7 +189,7 @@ func (mp *metaPartition) getInode(ino *Inode, listAll bool) (resp *InodeResponse
 		return
 	}
 
-	ctime := Now.GetCurrentTime().Unix()
+	ctime := timeutil.GetCurrentTimeUnix()
 
 	/*
 	 * FIXME: not protected by lock yet, since nothing is depending on atime.
@@ -459,10 +456,10 @@ func (mp *metaPartition) fsmAppendExtents(ino *Inode) (status uint8) {
 	}
 	delExtents := ino2.AppendExtents(eks, ino.ModifyTime, mp.volType)
 	mp.updateUsedInfo(int64(ino2.Size)-oldSize, 0, ino2.Inode)
-	log.LogInfof("fsmAppendExtents inode(%v) deleteExtents(%v)", ino2.Inode, delExtents)
+	log.LogInfof("fsmAppendExtents mpId[%v].inode(%v) deleteExtents(%v)", mp.config.PartitionId, ino2.Inode, delExtents)
 	mp.uidManager.minusUidSpace(ino2.Uid, ino2.Inode, delExtents)
 
-	log.LogInfof("fsmAppendExtents inode(%v) DecSplitExts deleteExtents(%v)", ino2.Inode, delExtents)
+	log.LogInfof("fsmAppendExtents mpId[%v].inode(%v) DecSplitExts deleteExtents(%v)", mp.config.PartitionId, ino2.Inode, delExtents)
 	ino2.DecSplitExts(mp.config.PartitionId, delExtents)
 	mp.extDelCh <- delExtents
 	return
@@ -499,11 +496,12 @@ func (mp *metaPartition) fsmAppendExtentsWithCheck(ino *Inode, isSplit bool) (st
 	}
 
 	if status = mp.uidManager.addUidSpace(fsmIno.Uid, fsmIno.Inode, eks[:1]); status != proto.OpOk {
-		log.LogErrorf("fsmAppendExtentsWithCheck.addUidSpace status %v", status)
+		log.LogErrorf("fsmAppendExtentsWithCheck.mp %v addUidSpace status %v", mp.config.PartitionId, status)
 		return
 	}
 
-	log.LogDebugf("action[fsmAppendExtentsWithCheck] ino %v isSplit %v ek %v hist len %v", fsmIno.Inode, isSplit, eks[0], fsmIno.getLayerLen())
+	log.LogDebugf("action[fsmAppendExtentsWithCheck] mp %v ino %v isSplit %v ek %v hist len %v discardExtentKey %v",
+		mp.config.PartitionId, fsmIno.Inode, isSplit, eks[0], fsmIno.getLayerLen(), discardExtentKey)
 
 	appendExtParam := &AppendExtParam{
 		mpId:             mp.config.PartitionId,
@@ -546,11 +544,12 @@ func (mp *metaPartition) fsmAppendExtentsWithCheck(ino *Inode, isSplit bool) (st
 	if status == proto.OpConflictExtentsErr {
 		mp.extDelCh <- eks[:1]
 		mp.uidManager.minusUidSpace(fsmIno.Uid, fsmIno.Inode, eks[:1])
-		log.LogDebugf("fsmAppendExtentsWithCheck delExtents inode(%v) ek(%v)", fsmIno.Inode, delExtents)
+		log.LogDebugf("fsmAppendExtentsWithCheck mp %v delExtents inode(%v) ek(%v)", mp.config.PartitionId, fsmIno.Inode, delExtents)
 	}
 
 	mp.updateUsedInfo(int64(fsmIno.Size)-oldSize, 0, fsmIno.Inode)
-	log.LogInfof("fsmAppendExtentWithCheck inode(%v) ek(%v) deleteExtents(%v) discardExtents(%v) status(%v)", fsmIno.Inode, eks[0], delExtents, discardExtentKey, status)
+	log.LogInfof("fsmAppendExtentWithCheck mp %v inode(%v) ek(%v) deleteExtents(%v) discardExtents(%v) status(%v)",
+		mp.config.PartitionId, fsmIno.Inode, eks[0], delExtents, discardExtentKey, status)
 
 	return
 }

@@ -106,6 +106,7 @@ func (d *Dentry) isDeleted() bool {
 func (d *Dentry) setDeleted() {
 	if d.multiSnap == nil {
 		log.LogErrorf("action[setDeleted] d %v be set deleted not found multiSnap", d)
+		return
 	}
 	log.LogDebugf("action[setDeleted] d %v be set deleted", d)
 	d.multiSnap.VerSeq |= uint64(1) << 63
@@ -195,6 +196,7 @@ func (d *Dentry) deleteVerSnapshot(delVerSeq uint64, mpVerSeq uint64, verlist []
 	log.LogDebugf("action[deleteVerSnapshot] enter.dentry %v delVerSeq %v mpVer %v verList %v", d, delVerSeq, mpVerSeq, verlist)
 	// create denParm version
 	if !isInitSnapVer(delVerSeq) && delVerSeq > mpVerSeq {
+
 		panic(fmt.Sprintf("Dentry version %v large than mp %v", delVerSeq, mpVerSeq))
 	}
 

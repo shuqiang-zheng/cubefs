@@ -49,7 +49,8 @@ type DataNode struct {
 	TotalPartitionSize        uint64
 	NodeSetID                 uint64
 	PersistenceDataPartitions []uint64
-	BadDisks                  []string
+	BadDisks                  []string            //Keep this old field for compatibility
+	BadDiskStats              []proto.BadDiskStat //key: disk path
 	DecommissionedDisks       sync.Map
 	ToBeOffline               bool
 	RdOnly                    bool
@@ -152,7 +153,10 @@ func (dataNode *DataNode) updateNodeMetric(resp *proto.DataNodeHeartbeatResponse
 	dataNode.DataPartitionCount = resp.CreatedPartitionCnt
 	dataNode.DataPartitionReports = resp.PartitionReports
 	dataNode.TotalPartitionSize = resp.TotalPartitionSize
+
 	dataNode.BadDisks = resp.BadDisks
+	dataNode.BadDiskStats = resp.BadDiskStats
+
 	dataNode.StartTime = resp.StartTime
 	if dataNode.Total == 0 {
 		dataNode.UsageRatio = 0.0
@@ -511,12 +515,13 @@ func (dataNode *DataNode) resetDecommissionStatus() {
 	dataNode.DecommissionCompleteTime = 0
 	dataNode.DecommissionDiskList = make([]string, 0)
 }
-func (dataNode *DataNode) createVersionTask(volume string, version uint64, op uint8, addr string) (task *proto.AdminTask) {
+func (dataNode *DataNode) createVersionTask(volume string, version uint64, op uint8, addr string, verList []*proto.VolVersionInfo) (task *proto.AdminTask) {
 	request := &proto.MultiVersionOpRequest{
-		VolumeID: volume,
-		VerSeq:   version,
-		Op:       uint8(op),
-		Addr:     addr,
+		VolumeID:   volume,
+		VerSeq:     version,
+		Op:         uint8(op),
+		Addr:       addr,
+		VolVerList: verList,
 	}
 	log.LogInfof("action[createVersionTask] op %v  datanode addr %v addr %v volume %v seq %v", op, dataNode.Addr, addr, volume, version)
 	task = proto.NewAdminTask(proto.OpVersionOperation, dataNode.Addr, request)
