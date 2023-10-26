@@ -722,7 +722,10 @@ func (c *Cluster) syncMultiVersion(vol *Vol, val []byte) (err error) {
 	metadata.Op = opSyncMulitVersion
 	metadata.K = MultiVerPrefix + strconv.FormatUint(vol.ID, 10)
 	metadata.V = val
-
+	if c == nil {
+		log.LogErrorf("syncMultiVersion c is nil")
+		return fmt.Errorf("vol %v but cluster is nil", vol.Name)
+	}
 	return c.submit(metadata)
 }
 
@@ -781,7 +784,10 @@ func (c *Cluster) loadMultiVersion(vol *Vol) (err error) {
 		log.LogWarnf("action[loadMultiVersion] MultiVersion zero and do init")
 		return vol.VersionMgr.init(c)
 	}
+	vol.VersionMgr.c = c
+	log.LogWarnf("action[loadMultiVersion] vol %v loadMultiVersion set cluster %v vol.VersionMgr %v", vol.Name, c, vol.VersionMgr)
 	for _, value := range result {
+		log.LogWarnf("action[loadMultiVersion] MultiVersion zero and do init")
 		return vol.VersionMgr.loadMultiVersion(c, value)
 	}
 	return
@@ -1398,7 +1404,7 @@ func (c *Cluster) loadVols() (err error) {
 		}
 
 		if err = c.loadMultiVersion(vol); err != nil {
-			log.LogInfof("action[loadVols],vol[%v] load ver manager error %v", vol.Name, err)
+			log.LogInfof("action[loadVols],vol[%v] load ver manager error %v c %v", vol.Name, err, c)
 			continue
 		}
 

@@ -557,8 +557,11 @@ func (o *ObjectNode) deleteObjectsHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var bytes []byte
-	bytes, err = ioutil.ReadAll(r.Body)
+	_, errorCode = VerifyContentLength(r, BodyLimit)
+	if errorCode != nil {
+		return
+	}
+	bytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.LogErrorf("deleteObjectsHandler: read request body fail: requestID(%v) volume(%v) err(%v)",
 			GetRequestID(r), param.Bucket(), err)
@@ -1457,6 +1460,9 @@ func (o *ObjectNode) deleteObjectHandler(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.LogErrorf("deleteObjectHandler: Volume delete file fail: "+
 			"requestID(%v) volume(%v) path(%v) err(%v)", GetRequestID(r), vol.Name(), param.Object(), err)
+		if strings.Contains(err.Error(), AccessDenied.ErrorMessage) {
+			err = AccessDenied
+		}
 		return
 	}
 
@@ -1552,6 +1558,10 @@ func (o *ObjectNode) putObjectTaggingHandler(w http.ResponseWriter, r *http.Requ
 	}
 	defer rateLimit.ReleaseLimitResource(vol.owner, param.apiName)
 
+	_, errorCode = VerifyContentLength(r, BodyLimit)
+	if errorCode != nil {
+		return
+	}
 	var requestBody []byte
 	if requestBody, err = ioutil.ReadAll(r.Body); err != nil {
 		log.LogErrorf("putObjectTaggingHandler: read request body data fail: requestID(%v) err(%v)",
@@ -1660,6 +1670,10 @@ func (o *ObjectNode) putObjectXAttrHandler(w http.ResponseWriter, r *http.Reques
 	}
 	defer rateLimit.ReleaseLimitResource(vol.owner, param.apiName)
 
+	_, errorCode = VerifyContentLength(r, BodyLimit)
+	if errorCode != nil {
+		return
+	}
 	var requestBody []byte
 	if requestBody, err = ioutil.ReadAll(r.Body); err != nil {
 		errorCode = &ErrorCode{
@@ -1961,4 +1975,22 @@ func GetContentLength(r *http.Request) int64 {
 		}
 	}
 	return r.ContentLength
+}
+
+func VerifyContentLength(r *http.Request, bodyLimit int64) (int64, *ErrorCode) {
+	dcl := r.Header.Get(HeaderNameXAmzDecodedContentLength)
+	var length = r.ContentLength
+	if dcl != "" {
+		l, err := strconv.ParseInt(dcl, 10, 64)
+		if err == nil {
+			length = l
+		}
+	}
+	if length > bodyLimit {
+		return 0, EntityTooLarge
+	}
+	if length <= 0 {
+		return 0, MissingContentLength
+	}
+	return length, nil
 }

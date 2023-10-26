@@ -2384,12 +2384,11 @@ func newSimpleView(vol *Vol) (view *proto.SimpleVolView) {
 		volDentryCount uint64
 	)
 	vol.mpsLock.RLock()
-	defer vol.mpsLock.RUnlock()
-
 	for _, mp := range vol.MetaPartitions {
 		volDentryCount = volDentryCount + mp.DentryCount
 		volInodeCount = volInodeCount + mp.InodeCount
 	}
+	vol.mpsLock.RUnlock()
 	maxPartitionID := vol.maxPartitionID()
 
 	view = &proto.SimpleVolView{
@@ -4690,13 +4689,13 @@ func volStat(vol *Vol, countByMeta bool) (stat *proto.VolStatInfo) {
 	stat.DpReadOnlyWhenVolFull = vol.DpReadOnlyWhenVolFull
 
 	vol.mpsLock.RLock()
-	defer vol.mpsLock.RUnlock()
 	for _, mp := range vol.MetaPartitions {
 		stat.InodeCount += mp.InodeCount
 		stat.TxCnt += mp.TxCnt
 		stat.TxRbInoCnt += mp.TxRbInoCnt
 		stat.TxRbDenCnt += mp.TxRbDenCnt
 	}
+	vol.mpsLock.RUnlock()
 
 	log.LogDebugf("total[%v],usedSize[%v]", stat.TotalSize, stat.UsedSize)
 	if proto.IsHot(vol.VolType) {

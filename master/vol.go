@@ -17,8 +17,10 @@ package master
 import (
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cubefs/cubefs/proto"
@@ -89,7 +91,6 @@ type Vol struct {
 	txOpLimit               int
 	zoneName                string
 	MetaPartitions          map[uint64]*MetaPartition `graphql:"-"`
-	mpsLock                 sync.RWMutex
 	dataPartitions          *DataPartitionMap
 	mpsCache                []byte
 	viewCache               []byte
@@ -110,6 +111,7 @@ type Vol struct {
 	enableQuota             bool
 	VersionMgr              *VolVersionManager
 	Forbidden               bool
+	mpsLock                 *mpsLockManager
 }
 
 func newVol(vv volValue) (vol *Vol) {
@@ -177,7 +179,7 @@ func newVol(vv volValue) (vol *Vol) {
 	}
 	vol.qosManager.volUpdateMagnify(magnifyQosVal)
 	vol.DpReadOnlyWhenVolFull = vv.DpReadOnlyWhenVolFull
-	vol.CheckStrategy()
+	vol.mpsLock = newMpsLockManager(vol)
 	return
 }
 
@@ -202,17 +204,110 @@ func newVolFromVolValue(vv *volValue) (vol *Vol) {
 	return vol
 }
 
-func (vol *Vol) CheckStrategy() {
+type mpsLockManager struct {
+	mpsLock         sync.RWMutex
+	lastEffectStack string
+	lockTime        time.Time
+	innerLock       sync.RWMutex
+	onLock          bool
+	hang            bool
+	vol             *Vol
+	enable          int32 // only config debug log enable lock
+}
+
+var lockCheckInterval = time.Second
+var lockExpireInterval = time.Minute
+
+func newMpsLockManager(vol *Vol) *mpsLockManager {
+	lc := &mpsLockManager{vol: vol}
+	go lc.CheckExceptionLock(lockCheckInterval, lockExpireInterval)
+	if log.EnableDebug() {
+		atomic.StoreInt32(&lc.enable, 1)
+	}
+	return lc
+}
+
+func (mpsLock *mpsLockManager) Lock() {
+	mpsLock.mpsLock.Lock()
+	if log.EnableDebug() && atomic.LoadInt32(&mpsLock.enable) == 1 {
+		mpsLock.innerLock.Lock()
+		mpsLock.onLock = true
+		mpsLock.lockTime = time.Now()
+		mpsLock.lastEffectStack = fmt.Sprintf("Lock stack %v", string(debug.Stack()))
+	}
+}
+
+func (mpsLock *mpsLockManager) UnLock() {
+	mpsLock.mpsLock.Unlock()
+	if log.EnableDebug() && atomic.LoadInt32(&mpsLock.enable) == 1 {
+		mpsLock.onLock = false
+		mpsLock.lockTime = time.Unix(0, 0)
+		mpsLock.lastEffectStack = fmt.Sprintf("UnLock stack %v", string(debug.Stack()))
+		mpsLock.innerLock.Unlock()
+	}
+}
+
+func (mpsLock *mpsLockManager) RLock() {
+	mpsLock.mpsLock.RLock()
+	if log.EnableDebug() && atomic.LoadInt32(&mpsLock.enable) == 1 {
+		mpsLock.innerLock.RLock()
+		mpsLock.hang = false
+		mpsLock.onLock = true
+		mpsLock.lockTime = time.Now()
+		mpsLock.lastEffectStack = fmt.Sprintf("RLock stack %v", string(debug.Stack()))
+	}
+}
+
+func (mpsLock *mpsLockManager) RUnlock() {
+	mpsLock.mpsLock.RUnlock()
+	if log.EnableDebug() && atomic.LoadInt32(&mpsLock.enable) == 1 {
+		mpsLock.onLock = false
+		mpsLock.hang = false
+		mpsLock.lockTime = time.Unix(0, 0)
+		mpsLock.lastEffectStack = fmt.Sprintf("RUnlock stack %v", string(debug.Stack()))
+		mpsLock.innerLock.RUnlock()
+	}
+}
+
+func (mpsLock *mpsLockManager) CheckExceptionLock(interval time.Duration, expireTime time.Duration) {
+	ticker := time.NewTicker(interval)
+	for {
+		select {
+		case <-ticker.C:
+			if mpsLock.vol.status() == markDelete || atomic.LoadInt32(&mpsLock.enable) == 0 {
+				break
+			}
+			if !log.EnableDebug() {
+				continue
+			}
+			if !mpsLock.onLock {
+				continue
+			}
+			tm := time.Now()
+			if tm.After(mpsLock.lockTime.Add(expireTime)) {
+				log.LogWarnf("vol %v mpsLock hang more than %v since time %v stack(%v)",
+					mpsLock.vol.Name, expireTime, mpsLock.lockTime, mpsLock.lastEffectStack)
+				mpsLock.hang = true
+			}
+		}
+	}
+}
+
+func (vol *Vol) CheckStrategy(c *Cluster) {
 	//make sure resume all the processing ver deleting tasks before checking
-	waitTime := time.Second * defaultIntervalToCheck
-	waited := false
+	if !atomic.CompareAndSwapInt32(&vol.VersionMgr.checkStrategy, 0, 1) {
+		return
+	}
 
 	go func() {
+		waitTime := 5 * time.Second * defaultIntervalToCheck
+		waited := false
 		for {
+			time.Sleep(waitTime)
 			if vol.Status == markDelete {
 				break
 			}
-			if vol.VersionMgr.c != nil && vol.VersionMgr.c.IsLeader() {
+			if c != nil && c.IsLeader() {
 				if !waited {
 					log.LogInfof("wait for %v seconds once after becoming leader to make sure all the ver deleting tasks are resumed",
 						waitTime)
@@ -228,10 +323,9 @@ func (vol *Vol) CheckStrategy() {
 					continue
 				}
 				vol.VersionMgr.RUnlock()
-				vol.VersionMgr.checkCreateStrategy()
-				vol.VersionMgr.checkDeleteStrategy()
+				vol.VersionMgr.checkCreateStrategy(c)
+				vol.VersionMgr.checkDeleteStrategy(c)
 			}
-			time.Sleep(waitTime)
 		}
 	}()
 }
@@ -300,7 +394,7 @@ func (vol *Vol) refreshOSSSecure() (key, secret string) {
 
 func (vol *Vol) addMetaPartition(mp *MetaPartition) {
 	vol.mpsLock.Lock()
-	defer vol.mpsLock.Unlock()
+	defer vol.mpsLock.UnLock()
 	if _, ok := vol.MetaPartitions[mp.PartitionID]; !ok {
 		vol.MetaPartitions[mp.PartitionID] = mp
 		return
@@ -333,6 +427,11 @@ func (vol *Vol) maxPartitionID() (maxPartitionID uint64) {
 func (vol *Vol) getRWMetaPartitionNum() (num uint64, isHeartBeatDone bool) {
 	vol.mpsLock.RLock()
 	defer vol.mpsLock.RUnlock()
+	// avoid split during volume creation
+	if len(vol.MetaPartitions) < defaultReplicaNum {
+		log.LogDebugf("The vol[%v] is being created.", vol.Name)
+		return num, false
+	}
 	for _, mp := range vol.MetaPartitions {
 		if !mp.heartBeatDone {
 			log.LogInfof("The mp[%v] of vol[%v] is not done", mp.PartitionID, vol.Name)
@@ -1096,7 +1195,7 @@ func (vol *Vol) deleteDataPartitionFromDataNode(c *Cluster, task *proto.AdminTas
 }
 
 func (vol *Vol) deleteVolFromStore(c *Cluster) (err error) {
-
+	log.LogWarnf("deleteVolFromStore vol %v", vol.Name)
 	if err = c.syncDeleteVol(vol); err != nil {
 		return
 	}
