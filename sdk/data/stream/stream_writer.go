@@ -16,6 +16,7 @@ package stream
 
 import (
 	"fmt"
+	"github.com/cubefs/cubefs/util/rdma"
 	"hash/crc32"
 	"net"
 	"sync/atomic"
@@ -37,6 +38,7 @@ const (
 	MaxNewHandlerRetry             = 3
 	MaxPacketErrorCount            = 128
 	MaxDirtyListLen                = 0
+	isRdma                         = true
 )
 
 const (
@@ -394,8 +396,15 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 		reqPacket.CRC = crc32.ChecksumIEEE(reqPacket.Data[:packSize])
 
 		replyPacket := new(Packet)
-		err = sc.Send(retry, reqPacket, func(conn *net.TCPConn) (error, bool) {
-			e := replyPacket.ReadFromConn(conn, proto.ReadDeadlineTime)
+		err = sc.Send(&retry, reqPacket, func(conn net.Conn) (error, bool) {
+			var e error
+			if isRdma {
+				c, _ := conn.(*rdma.Connection)
+				e = replyPacket.RecvRespFromRDMAConn(c, proto.ReadDeadlineTime)
+			} else {
+				e = replyPacket.ReadFromConn(conn, proto.ReadDeadlineTime)
+			}
+
 			if e != nil {
 				log.LogWarnf("Stream Writer doOverwrite: ino(%v) failed to read from connect, req(%v) err(%v)", s.inode, reqPacket, e)
 				// Upon receiving TryOtherAddrError, other hosts will be retried.
@@ -410,9 +419,14 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 				e = TryOtherAddrError
 			}
 			return e, false
-		})
+		}, isRdma)
 
-		proto.Buffers.Put(reqPacket.Data)
+		if isRdma {
+			rdma.ReleaseDataBuffer(reqPacket.Data)
+		} else {
+			proto.Buffers.Put(reqPacket.Data)
+		}
+
 		reqPacket.Data = nil
 		log.LogDebugf("doOverwrite: ino(%v) req(%v) reqPacket(%v) err(%v) replyPacket(%v)", s.inode, req, reqPacket, err, replyPacket)
 
