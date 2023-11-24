@@ -20,6 +20,7 @@ import (
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/sdk/data/wrapper"
 	"github.com/cubefs/cubefs/util"
+	"github.com/cubefs/cubefs/util/rdma"
 	"hash/crc32"
 	"io"
 	"net"
@@ -142,7 +143,11 @@ func (p *Packet) isValidReadReply(q *Packet) bool {
 
 func (p *Packet) writeToConn(conn net.Conn) error {
 	p.CRC = crc32.ChecksumIEEE(p.Data[:p.Size])
-	return p.WriteToConn(conn)
+	if c, ok := conn.(*rdma.Connection); ok {
+		return p.WriteToRDMAConn(c)
+	} else {
+		return p.WriteToConn(conn)
+	}
 }
 
 func (p *Packet) readFromConn(c net.Conn, deadlineTime time.Duration) (err error) {
