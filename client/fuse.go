@@ -23,6 +23,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/cubefs/cubefs/sdk/data/stream"
 	"io/ioutil"
 	syslog "log"
 	"net"
@@ -349,6 +350,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	stream.StreamRdmaConnPool = util.NewRdmaConnectPool()
 
 	proto.InitBufferPool(opt.BuffersTotalLimit)
 	if proto.IsCold(opt.VolType) {
