@@ -31,7 +31,7 @@ NPROC=${NPROC:-"1"}
 
 GCC_LIBRARY_PATH="/lib /lib64 /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64"
 cgo_cflags="-std=c99 -Wall"
-cgo_ldflags="-w -lstdc++ -lm"
+cgo_ldflags="-lstdc++ -lm"
 
 case $(uname -s | tr 'A-Z' 'a-z') in
     "linux"|"darwin")
@@ -233,7 +233,7 @@ pre_build_server() {
 
 pre_build() {
     export CGO_CFLAGS="-std=c99 -Wall"
-    export CGO_LDFLAGS="-w"
+    export CGO_LDFLAGS=""
 
     init_gopath
 }
