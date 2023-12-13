@@ -17,6 +17,7 @@ package datanode
 import (
 	"bytes"
 	"fmt"
+	"github.com/cubefs/cubefs/sdk/data/stream"
 	"github.com/cubefs/cubefs/util/rdma"
 	"net"
 	"net/http"
@@ -270,6 +271,11 @@ func (s *DataNode) parseConfig(cfg *config.Config) (err error) {
 	LocalRdmaIP = cfg.GetString("rdmaIP")
 	port = cfg.GetString(proto.ListenPort)
 	rdmaServerPort = cfg.GetString("rdmaPort")
+	if LocalRdmaIP != "" && rdmaServerPort != "" {
+		stream.StreamRdmaConnPool = util.NewRdmaConnectPool()
+		repl.RdmaConnPool = util.NewRdmaConnectPool()
+	}
+
 	s.bindIp = cfg.GetBool(proto.BindIpKey)
 	serverPort = port
 	if regexpPort, err = regexp.Compile("^(\\d)+$"); err != nil {

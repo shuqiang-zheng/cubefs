@@ -189,16 +189,16 @@ func (dp *DataPartition) GetAllRdmaAddrs() string {
 }
 
 func GetRdmaAddr(addr string) string {
-	/*
-		pars := strings.Split(addr, ":")
-		ip, _ := pars[0], pars[1]
-		ips := strings.Split(ip, ".")
-		tmp, _ := strconv.Atoi(ips[3])
-		ip = ips[0] + "." + ips[1] + "." + ips[2] + "." + strconv.Itoa(tmp+10)
-		rdmaAddr := ip + ":18515"
-		return rdmaAddr
-	*/
-	return addr
+
+	pars := strings.Split(addr, ":")
+	ip, _ := pars[0], pars[1]
+	ips := strings.Split(ip, ".")
+	tmp, _ := strconv.Atoi(ips[3])
+	ip = ips[0] + "." + ips[1] + "." + ips[2] + "." + strconv.Itoa(tmp+10)
+	rdmaAddr := ip + ":18515"
+	return rdmaAddr
+
+	//return addr
 }
 
 func isExcluded(dp *DataPartition, exclude map[string]struct{}) bool {

@@ -8,10 +8,10 @@ struct RdmaPoolConfig* getRdmaPoolConfig() {
     rdmaPoolConfig = (struct RdmaPoolConfig*)malloc(sizeof(struct RdmaPoolConfig));
     memset(rdmaPoolConfig, 0, sizeof(struct RdmaPoolConfig));
 
-    rdmaPoolConfig->memBlockNum = 262144;//
+    rdmaPoolConfig->memBlockNum = 8 * 1024 * 5;//
 
 
-    rdmaPoolConfig->memBlockSize = 16;
+    rdmaPoolConfig->memBlockSize = 65536 * 2;
 
 
     rdmaPoolConfig->memPoolLevel = 18;

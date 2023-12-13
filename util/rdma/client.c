@@ -145,8 +145,11 @@ int OnClientConnDisconnected(struct rdma_cm_id *id, void* ctx) {//TODO
     pthread_spin_lock(&conn->lock);
     conn->state = CONN_STATE_CLOSED;
     pthread_spin_unlock(&conn->lock);
-    
-    DisConnectCallback(conn->connContext);
+
+    if (conn->connContext != NULL) {
+        DisConnectCallback(conn->connContext);
+    }
+
 
     wait_group_wait(&(conn->wg));
 

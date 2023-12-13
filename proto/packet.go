@@ -786,7 +786,8 @@ func (p *Packet) SendRespToRDMAConn(conn *rdma.Connection) (err error) {
 		copy(respBuff[offset:], p.Arg)
 	}
 	offset += 40
-
+	log.LogDebugf("offset %v", offset)
+	log.LogDebugf("P.size ", p.Size)
 	if p.Data != nil && p.Size != 0 {
 		copy(respBuff[offset:offset+p.Size], p.Data)
 	}

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <assert.h>
 #include <string.h>
+#include <pthread.h>
 
 #define NODE_UNUSED 0
 #define NODE_USED 1
@@ -11,6 +12,7 @@
 #define NODE_FULL 3
 
 struct buddy {
+    pthread_mutex_t mutex;
 	int level;
 	uint8_t tree[1];
 };
@@ -21,6 +23,7 @@ buddy_new(int level) {
 	struct buddy * self = malloc(sizeof(struct buddy) + sizeof(uint8_t) * (size * 2 - 2));
 	self->level = level;
 	memset(self->tree , NODE_UNUSED , size*2-1);
+	pthread_mutex_init(&self->mutex, NULL);
 	return self;
 }
 
@@ -66,6 +69,7 @@ _mark_parent(struct buddy * self, int index) {
 
 int
 buddy_alloc(struct buddy * self , int s) {
+    pthread_mutex_lock(&self->mutex);
 	int size;
 	if (s==0) {
 		size = 1;
@@ -74,8 +78,10 @@ buddy_alloc(struct buddy * self , int s) {
 	}
 	int length = 1 << self->level;
 
-	if (size > length)
+	if (size > length) {
+	    pthread_mutex_unlock(&self->mutex);
 		return -1;
+    }
 
 	int index = 0;
 	int level = 0;
@@ -85,6 +91,7 @@ buddy_alloc(struct buddy * self , int s) {
 			if (self->tree[index] == NODE_UNUSED) {
 				self->tree[index] = NODE_USED;
 				_mark_parent(self, index);
+				pthread_mutex_unlock(&self->mutex);
 				return _index_offset(index, level, self->level);
 			}
 		} else {
@@ -121,7 +128,7 @@ buddy_alloc(struct buddy * self , int s) {
 			}
 		}
 	}
-
+    pthread_mutex_unlock(&self->mutex);
 	return -1;
 }
 
@@ -142,6 +149,7 @@ _combine(struct buddy * self, int index) {
 
 void
 buddy_free(struct buddy * self, int offset) {
+    pthread_mutex_lock(&self->mutex);
 	assert( offset < (1<< self->level));
 	int left = 0;
 	int length = 1 << self->level;
@@ -152,9 +160,11 @@ buddy_free(struct buddy * self, int offset) {
 		case NODE_USED:
 			assert(offset == left);
 			_combine(self, index);
+			pthread_mutex_unlock(&self->mutex);
 			return;
 		case NODE_UNUSED:
 			assert(0);
+			pthread_mutex_unlock(&self->mutex);
 			return;
 		default:
 			length /= 2;
@@ -167,10 +177,12 @@ buddy_free(struct buddy * self, int offset) {
 			break;
 		}
 	}
+	pthread_mutex_unlock(&self->mutex);
 }
 
 int
 buddy_size(struct buddy * self, int offset) {
+    pthread_mutex_lock(&self->mutex);
 	assert( offset < (1<< self->level));
 	int left = 0;
 	int length = 1 << self->level;
@@ -180,9 +192,11 @@ buddy_size(struct buddy * self, int offset) {
 		switch (self->tree[index]) {
 		case NODE_USED:
 			assert(offset == left);
+			pthread_mutex_unlock(&self->mutex);
 			return length;
 		case NODE_UNUSED:
 			assert(0);
+			pthread_mutex_unlock(&self->mutex);
 			return length;
 		default:
 			length /= 2;
@@ -195,6 +209,7 @@ buddy_size(struct buddy * self, int offset) {
 			break;
 		}
 	}
+	pthread_mutex_unlock(&self->mutex);
 }
 
 static void

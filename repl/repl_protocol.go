@@ -31,7 +31,7 @@ import (
 
 var (
 	gConnPool    = util.NewConnectPool()
-	rdmaConnPool = util.NewRdmaConnectPool()
+	RdmaConnPool *util.RdmaConnectPool //= util.NewRdmaConnectPool()
 )
 
 // ReplProtocol defines the struct of the replication protocol.
@@ -99,7 +99,7 @@ func (ft *FollowerTransport) serverWriteToFollower() {
 					p.PackErrorBody(ActionSendToFollowers, err.Error())
 					p.respCh <- fmt.Errorf(string(p.Data[:p.Size]))
 					log.LogErrorf("serverWriteToFollower ft.addr(%v), err (%v)", ft.addr, err.Error())
-					rdmaConnPool.PutRdmaConn(conn, true)
+					RdmaConnPool.PutRdmaConn(conn, true)
 
 					continue
 				}
@@ -153,7 +153,7 @@ func (ft *FollowerTransport) readFollowerResult(request *FollowerPacket) (err er
 			reply.clean()
 			request.respCh <- err
 			if err != nil {
-				rdmaConnPool.PutRdmaConn(conn, true)
+				RdmaConnPool.PutRdmaConn(conn, true)
 			}
 		} else {
 			reply.clean()
@@ -539,7 +539,7 @@ func (rp *ReplProtocol) allocateFollowersConns(p *Packet, index int) (transport 
 
 		} else {
 			if _, ok := rp.sourceConn.(*rdma.Connection); ok {
-				conn, err = rdmaConnPool.GetRdmaConn(addr)
+				conn, err = RdmaConnPool.GetRdmaConn(addr)
 			} else {
 				conn, err = gConnPool.GetConnect(addr)
 			}

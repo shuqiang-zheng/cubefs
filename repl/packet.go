@@ -350,41 +350,13 @@ func (p *Packet) ReadFromConnFromCli(c net.Conn, deadlineTime time.Duration) (er
 		}
 	*/ //rdma todo
 
-	if _, ok := c.(*net.TCPConn); ok {
-		var header []byte
-		header, err = proto.Buffers.Get(util.PacketHeaderSize)
-		if err != nil {
-			header = make([]byte, util.PacketHeaderSize)
-		}
-		defer proto.Buffers.Put(header)
-		if _, err = io.ReadFull(c, header); err != nil {
-			return
-		}
-		if err = p.UnmarshalHeader(header); err != nil {
-			return
-		}
-
-		if p.ArgLen > 0 {
-			if err = proto.ReadFull(c, &p.Arg, int(p.ArgLen)); err != nil {
-				return
-			}
-		}
-
-		if p.Size < 0 {
-			return
-		}
-		size := p.Size
-		if p.IsReadOperation() && p.ResultCode == proto.OpInitResultCode {
-			size = 0
-		}
-		return p.ReadFull(c, p.Opcode, int(size))
-	} else {
+	if conn, ok := c.(*rdma.Connection); ok {
 		log.LogDebugf("rdma conn read start")
 		println("rdma conn read start")
 		var headerBuff []byte
 		var dataBuff []byte
 		var offset int
-		conn, _ := c.(*rdma.Connection)
+		//conn, _ := c.(*rdma.Connection)
 		if _, err = conn.Read(nil); err != nil {
 			return
 		}
@@ -422,6 +394,34 @@ func (p *Packet) ReadFromConnFromCli(c net.Conn, deadlineTime time.Duration) (er
 		p.IsRdma = true
 		log.LogDebugf("rdma conn read exit")
 		return
+	} else {
+		var header []byte
+		header, err = proto.Buffers.Get(util.PacketHeaderSize)
+		if err != nil {
+			header = make([]byte, util.PacketHeaderSize)
+		}
+		defer proto.Buffers.Put(header)
+		if _, err = io.ReadFull(c, header); err != nil {
+			return
+		}
+		if err = p.UnmarshalHeader(header); err != nil {
+			return
+		}
+
+		if p.ArgLen > 0 {
+			if err = proto.ReadFull(c, &p.Arg, int(p.ArgLen)); err != nil {
+				return
+			}
+		}
+
+		if p.Size < 0 {
+			return
+		}
+		size := p.Size
+		if p.IsReadOperation() && p.ResultCode == proto.OpInitResultCode {
+			size = 0
+		}
+		return p.ReadFull(c, p.Opcode, int(size))
 	}
 }
 

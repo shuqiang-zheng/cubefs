@@ -16,25 +16,25 @@ confDir=${1}/conf
 
 # start master service
 echo "begin start master service"
-./build/bin/master -c ${confDir}/master1.conf
-./build/bin/master -c ${confDir}/master2.conf
-./build/bin/master -c ${confDir}/master3.conf
+./build/bin/cfs-server -c ${confDir}/master1.conf
+./build/bin/cfs-server -c ${confDir}/master2.conf
+./build/bin/cfs-server -c ${confDir}/master3.conf
 echo "start master service success"
 
 # start meta service
 echo "begin start metanode service"
-./build/bin/meta -c ${confDir}/meta1.conf
-./build/bin/meta -c ${confDir}/meta2.conf
-./build/bin/meta -c ${confDir}/meta3.conf
-./build/bin/meta -c ${confDir}/meta4.conf
+./build/bin/cfs-server -c ${confDir}/meta1.conf
+./build/bin/cfs-server -c ${confDir}/meta2.conf
+./build/bin/cfs-server -c ${confDir}/meta3.conf
+./build/bin/cfs-server -c ${confDir}/meta4.conf
 echo "start metanode service success"
 
 # start data service
 echo "begin start datanode service"
-./build/bin/data -c ${confDir}/data1.conf
-./build/bin/data -c ${confDir}/data2.conf
-./build/bin/data -c ${confDir}/data3.conf
-./build/bin/data -c ${confDir}/data4.conf
+./build/bin/cfs-server -c ${confDir}/data1.conf
+./build/bin/cfs-server -c ${confDir}/data2.conf
+./build/bin/cfs-server -c ${confDir}/data3.conf
+./build/bin/cfs-server -c ${confDir}/data4.conf
 echo "start datanode service success"
 
 ./build/bin/cfs-cli config set --addr 172.16.1.101:17010

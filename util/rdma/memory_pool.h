@@ -1,6 +1,8 @@
 #ifndef MEMORY_POOL_H
 #define MEMORY_POOL_H
 
+#include "buddy.h"
+#include <stdlib.h>
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 #include <unistd.h>

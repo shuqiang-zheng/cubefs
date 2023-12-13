@@ -1,6 +1,5 @@
 #include "memory_pool.h"
-#include <stdlib.h>
-#include "buddy.h"
+
 
 struct ibv_pd* alloc_pd() {
     struct ibv_device **dev_list = ibv_get_device_list(NULL);
