@@ -21,6 +21,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httputil"
+	"time"
 
 	"github.com/samsarahq/thunder/graphql"
 	"github.com/samsarahq/thunder/graphql/introspection"
@@ -44,8 +45,10 @@ func (m *Server) startHTTPService(modulename string, cfg *config.Config) {
 	}
 
 	var server = &http.Server{
-		Addr:    addr,
-		Handler: router,
+		Addr:         addr,
+		Handler:      router,
+		ReadTimeout:  5 * time.Minute,
+		WriteTimeout: 5 * time.Minute,
 	}
 
 	var serveAPI = func() {
