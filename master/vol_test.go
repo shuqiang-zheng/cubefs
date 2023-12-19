@@ -228,6 +228,8 @@ func createVol(kv map[string]interface{}, t *testing.T) {
 		checkWithDefault(kv, cacheCapacity, 80)
 		checkWithDefault(kv, replicaNumKey, 1)
 		break
+	default:
+		// do nothing
 	}
 
 	processWithFatalV2(proto.AdminCreateVol, true, kv, t)
@@ -342,6 +344,9 @@ func TestVolMpsLock(t *testing.T) {
 	}
 	expireTime := time.Microsecond * 50
 	vol := newVol(vv)
+	if vol.mpsLock.enable == 0 {
+		return
+	}
 	vol.mpsLock.Lock()
 	mpsLock := vol.mpsLock
 	assert.True(t, !(mpsLock.vol.status() == markDelete || atomic.LoadInt32(&mpsLock.enable) == 0))

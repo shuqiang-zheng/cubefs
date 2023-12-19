@@ -19,7 +19,7 @@ import (
 	"fmt"
 	syslog "log"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path"
@@ -55,6 +55,8 @@ const (
 	ConfigKeyRole              = "role"
 	ConfigKeyLogDir            = "logDir"
 	ConfigKeyLogLevel          = "logLevel"
+	ConfigKeyLogRotateSize     = "logRotateSize"
+	ConfigKeyLogRotateHeadRoom = "logRotateHeadRoom"
 	ConfigKeyProfPort          = "prof"
 	ConfigKeyWarnLogDir        = "warnLogDir"
 	ConfigKeyBuffersTotalLimit = "buffersTotalLimit"
@@ -161,6 +163,8 @@ func main() {
 	role := cfg.GetString(ConfigKeyRole)
 	logDir := cfg.GetString(ConfigKeyLogDir)
 	logLevel := cfg.GetString(ConfigKeyLogLevel)
+	logRotateSize := cfg.GetInt64(ConfigKeyLogRotateSize)
+	logRotateHeadRoom := cfg.GetInt64(ConfigKeyLogRotateHeadRoom)
 	profPort := cfg.GetString(ConfigKeyProfPort)
 	umpDatadir := cfg.GetString(ConfigKeyWarnLogDir)
 	buffersTotalLimit := cfg.GetInt64(ConfigKeyBuffersTotalLimit)
@@ -222,8 +226,14 @@ func main() {
 	default:
 		level = log.ErrorLevel
 	}
-
-	_, err = log.InitLog(logDir, module, level, nil, logLeftSpaceLimit)
+	rotate := log.NewLogRotate()
+	if logRotateSize > 0 {
+		rotate.SetRotateSizeMb(logRotateSize)
+	}
+	if logRotateHeadRoom > 0 {
+		rotate.SetHeadRoomMb(logRotateHeadRoom)
+	}
+	_, err = log.InitLog(logDir, module, level, rotate, logLeftSpaceLimit)
 	if err != nil {
 		err = errors.NewErrorf("Fatal: failed to init log - %v", err)
 		fmt.Println(err)
@@ -263,12 +273,6 @@ func main() {
 			daemonize.SignalOutcome(err)
 			os.Exit(1)
 		}
-		if err = sysutil.RedirectFD(int(outputFile.Fd()), int(os.Stderr.Fd())); err != nil {
-			err = errors.NewErrorf("Fatal: failed to redirect fd - %v", err)
-			syslog.Println(err)
-			daemonize.SignalOutcome(err)
-			os.Exit(1)
-		}
 	}
 
 	if buffersTotalLimit < 0 {
@@ -298,11 +302,27 @@ func main() {
 
 	if profPort != "" {
 		go func() {
+			mainMux := http.NewServeMux()
+			mux := http.NewServeMux()
 			http.HandleFunc(log.SetLogLevelPath, log.SetLogLevel)
-			e := http.ListenAndServe(fmt.Sprintf(":%v", profPort), nil)
+			mux.Handle("/debug/pprof", http.HandlerFunc(pprof.Index))
+			mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
+			mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+			mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+			mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+			mux.Handle("/debug/", http.HandlerFunc(pprof.Index))
+			mainHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if strings.HasPrefix(req.URL.Path, "/debug/") {
+					mux.ServeHTTP(w, req)
+				} else {
+					http.DefaultServeMux.ServeHTTP(w, req)
+				}
+			})
+			mainMux.Handle("/", mainHandler)
+			e := http.ListenAndServe(fmt.Sprintf(":%v", profPort), mainMux)
 			if e != nil {
 				log.LogFlush()
-				err = errors.NewErrorf("cannot listen pprof %v err %v", profPort, err)
+				err = errors.NewErrorf("cannot listen pprof %v err %v", profPort, e)
 				syslog.Println(err)
 				daemonize.SignalOutcome(err)
 				os.Exit(1)

@@ -195,6 +195,21 @@ func (l *LcNode) parseConfig(cfg *config.Config) (err error) {
 	}
 	log.LogInfof("loadConfig: setup config: %v(%v)", configLcScanLimitPerSecondStr, lcScanLimitPerSecond)
 
+	// parse lcNodeTaskCount
+	var count int64
+	countStr := cfg.GetString(configLcNodeTaskCountLimit)
+	if countStr != "" {
+		if count, err = strconv.ParseInt(countStr, 10, 64); err != nil {
+			return fmt.Errorf("%v,err:%v", proto.ErrInvalidCfg, err.Error())
+		}
+	}
+	if count <= 0 {
+		lcNodeTaskCountLimit = defaultLcNodeTaskCountLimit
+	} else {
+		lcNodeTaskCountLimit = int(count)
+	}
+	log.LogInfof("loadConfig: setup config: %v(%v)", configLcNodeTaskCountLimit, lcNodeTaskCountLimit)
+
 	return
 }
 
@@ -245,8 +260,9 @@ func (l *LcNode) register() {
 func (l *LcNode) checkRegister() {
 	for {
 		if time.Since(l.lastHeartbeat) > time.Second*time.Duration(defaultLcNodeTimeOutSec) {
+			log.LogWarnf("lcnode might be deregistered from master, stop scanners...")
 			l.stopScanners()
-			log.LogWarnf("Lcnode might be deregistered from master, retry registering...")
+			log.LogWarnf("lcnode might be deregistered from master, retry registering...")
 			l.register()
 			l.lastHeartbeat = time.Now()
 		}
@@ -335,9 +351,8 @@ func (l *LcNode) stopServer() {
 				log.LogErrorf("action[StopTcpServer],err:%v", r)
 			}
 		}()
-
-		l.stopScanners()
 		close(l.stopC)
+		log.LogInfo("LcNode Stop!")
 	}
 }
 

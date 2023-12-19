@@ -65,6 +65,9 @@ const (
 	DefaultDiskMaxErr          = 1
 	DefaultDiskRetainMin       = 5 * util.GB // GB
 	DefaultNameResolveInterval = 1           // minutes
+
+	DefaultDiskUnavailableErrorCount          = 5
+	DefaultDiskUnavailablePartitionErrorCount = 3
 )
 
 const (
@@ -107,8 +110,19 @@ const (
 
 	// rate limit control enable
 	ConfigDiskQosEnable = "diskQosEnable" // bool
+	ConfigDiskReadIocc  = "diskReadIocc"  // int
+	ConfigDiskReadIops  = "diskReadIops"  // int
+	ConfigDiskReadFlow  = "diskReadFlow"  // int
+	ConfigDiskWriteIocc = "diskWriteIocc" // int
+	ConfigDiskWriteIops = "diskWriteIops" // int
+	ConfigDiskWriteFlow = "diskWriteFlow" // int
 
 	ConfigServiceIDKey = "serviceIDKey"
+
+	// disk status becomes unavailable if disk error count reaches this value
+	ConfigKeyDiskUnavailableErrorCount = "diskUnavailableErrorCount"
+	// disk status becomes unavailable if disk error partition count reaches this value
+	ConfigKeyDiskUnavailablePartitionErrorCount = "diskUnavailablePartitionErrorCount"
 )
 
 const cpuSampleDuration = 1 * time.Second
@@ -153,10 +167,12 @@ type DataNode struct {
 
 	diskQosEnable           bool
 	diskQosEnableFromMaster bool
-	diskIopsReadLimit       uint64
-	diskIopsWriteLimit      uint64
-	diskFlowReadLimit       uint64
-	diskFlowWriteLimit      uint64
+	diskReadIocc            int
+	diskReadIops            int
+	diskReadFlow            int
+	diskWriteIocc           int
+	diskWriteIops           int
+	diskWriteFlow           int
 	dpMaxRepairErrCnt       uint64
 	dpRepairTimeOut         uint64
 	clusterUuid             string
@@ -164,6 +180,9 @@ type DataNode struct {
 	serviceIDKey            string
 	cpuUtil                 atomicutil.Float64
 	cpuSamplerDone          chan struct{}
+
+	diskUnavailableErrorCount          uint64 // disk status becomes unavailable when disk error count reaches this value
+	diskUnavailablePartitionErrorCount uint64 // disk status becomes unavailable when disk error partition count reaches this value
 }
 
 type verOp2Phase struct {
@@ -332,6 +351,24 @@ func (s *DataNode) parseConfig(cfg *config.Config) (err error) {
 
 	s.serviceIDKey = cfg.GetString(ConfigServiceIDKey)
 
+	diskUnavailableErrorCount := cfg.GetInt64(ConfigKeyDiskUnavailableErrorCount)
+	if diskUnavailableErrorCount <= 0 || diskUnavailableErrorCount > 100 {
+		diskUnavailableErrorCount = DefaultDiskUnavailableErrorCount
+		log.LogDebugf("action[parseConfig] ConfigKeyDiskUnavailableErrorCount(%v) out of range, set as default(%v)",
+			diskUnavailableErrorCount, DefaultDiskUnavailableErrorCount)
+	}
+	s.diskUnavailableErrorCount = uint64(diskUnavailableErrorCount)
+	log.LogDebugf("action[parseConfig] load diskUnavailableErrorCount(%v)", s.diskUnavailableErrorCount)
+
+	diskUnavailablePartitionErrorCount := cfg.GetInt64(ConfigKeyDiskUnavailablePartitionErrorCount)
+	if diskUnavailablePartitionErrorCount <= 0 || diskUnavailablePartitionErrorCount > 100 {
+		diskUnavailablePartitionErrorCount = DefaultDiskUnavailablePartitionErrorCount
+		log.LogDebugf("action[parseConfig] ConfigKeyDiskUnavailablePartitionErrorCount(%v) out of range, set as default(%v)",
+			diskUnavailablePartitionErrorCount, DefaultDiskUnavailablePartitionErrorCount)
+	}
+	s.diskUnavailablePartitionErrorCount = uint64(diskUnavailablePartitionErrorCount)
+	log.LogDebugf("action[parseConfig] load diskUnavailablePartitionErrorCount(%v)", s.diskUnavailablePartitionErrorCount)
+
 	log.LogDebugf("action[parseConfig] load masterAddrs(%v).", MasterClient.Nodes())
 	log.LogDebugf("action[parseConfig] load port(%v).", s.port)
 	log.LogDebugf("action[parseConfig] load zoneName(%v).", s.zoneName)
@@ -339,8 +376,16 @@ func (s *DataNode) parseConfig(cfg *config.Config) (err error) {
 }
 
 func (s *DataNode) initQosLimit(cfg *config.Config) {
-	s.space.dataNode.diskQosEnable = cfg.GetBoolWithDefault(ConfigDiskQosEnable, true)
-	log.LogWarnf("action[initQosLimit] set qos value [%v] ,other param use default value", s.space.dataNode.diskQosEnable)
+	dn := s.space.dataNode
+	dn.diskQosEnable = cfg.GetBoolWithDefault(ConfigDiskQosEnable, true)
+	dn.diskReadIocc = cfg.GetInt(ConfigDiskReadIocc)
+	dn.diskReadIops = cfg.GetInt(ConfigDiskReadIops)
+	dn.diskReadFlow = cfg.GetInt(ConfigDiskReadFlow)
+	dn.diskWriteIocc = cfg.GetInt(ConfigDiskWriteIocc)
+	dn.diskWriteIops = cfg.GetInt(ConfigDiskWriteIops)
+	dn.diskWriteFlow = cfg.GetInt(ConfigDiskWriteFlow)
+	log.LogWarnf("action[initQosLimit] set qos [%v], read(iocc:%d iops:%d flow:%d) write(iocc:%d iops:%d flow:%d)",
+		dn.diskQosEnable, dn.diskReadIocc, dn.diskReadIops, dn.diskReadFlow, dn.diskWriteIocc, dn.diskWriteIops, dn.diskWriteFlow)
 }
 
 func (s *DataNode) updateQosLimit() {
@@ -426,6 +471,7 @@ func (s *DataNode) startSpaceManager(cfg *config.Config) (err error) {
 	wg.Wait()
 	// start async sample
 	s.space.StartDiskSample()
+	s.updateQosLimit() // load from config
 	return nil
 }
 
@@ -598,6 +644,9 @@ func (s *DataNode) registerHandler() {
 	http.HandleFunc("/getMetricsDegrade", s.getMetricsDegrade)
 	http.HandleFunc("/qosEnable", s.setQosEnable())
 	http.HandleFunc("/genClusterVersionFile", s.genClusterVersionFile)
+	http.HandleFunc("/setDiskBad", s.setDiskBadAPI)
+	http.HandleFunc("/setDiskQos", s.setDiskQos)
+	http.HandleFunc("/getDiskQos", s.getDiskQos)
 }
 
 func (s *DataNode) startTCPService() (err error) {
@@ -836,8 +885,10 @@ func (s *DataNode) startCpuSample() {
 				return
 			default:
 				// this function will sleep cpuSampleDuration
-				used := loadutil.GetCpuUtilPercent(cpuSampleDuration)
-				s.cpuUtil.Store(used)
+				used, err := loadutil.GetCpuUtilPercent(cpuSampleDuration)
+				if err == nil {
+					s.cpuUtil.Store(used)
+				}
 			}
 		}
 	}()

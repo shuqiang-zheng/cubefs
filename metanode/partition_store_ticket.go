@@ -127,6 +127,8 @@ func (mp *metaPartition) startSchedule(curIndex uint64) {
 					timer.Stop()
 				case opFSMStoreTick:
 					msgs = append(msgs, msg)
+				default:
+					// do nothing
 				}
 			case <-timer.C:
 				log.LogDebugf("[startSchedule] intervalToPersistData curIndex: %v,apply:%v", curIndex, mp.applyID)

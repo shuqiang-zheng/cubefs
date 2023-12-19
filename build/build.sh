@@ -10,7 +10,7 @@ VendorPath=${RootPath}/vendor
 DependsPath=${RootPath}/depends
 use_clang=$(echo ${CC} | grep "clang" | grep -v "grep")
 cgo_ldflags="-L${BuildDependsLibPath} -lrocksdb -lz -lbz2 -lsnappy -llz4 -lzstd -lstdc++"
-if [ "${use_clang}" != "" ]; then 
+if [ "${use_clang}" != "" ]; then
     cgo_ldflags="-L${BuildDependsLibPath} -lrocksdb -lz -lbz2 -lsnappy -llz4 -lzstd -lc++"
 fi
 cgo_cflags="-I${BuildDependsIncludePath}"
@@ -254,8 +254,7 @@ run_test() {
     export JENKINS_TEST=1
     ulimit -n 65536
     echo -n "${TPATH}"
-#    go test $MODFLAGS -ldflags "${LDFlags}" -cover ./master
-    go test -run TestVolMpsLock -cover -v -coverprofile=cover.output $(go list ./... | grep -v depends | grep master) | tee cubefs_unittest.output
+    go test -cover -v -coverprofile=cover.output $(go list ./... | grep -v depends) | tee cubefs_unittest.output
     ret=$?
     popd >/dev/null
     exit $ret
@@ -333,6 +332,16 @@ build_cli() {
     popd >/dev/null
 }
 
+
+
+build_cfs_deploy() {
+    #cfs_deploy need gorocksdb too
+    pushd $SrcPath >/dev/null
+    echo -n "build cfs-deploy      "
+    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-deploy ${SrcPath}/deploy/*.go  && echo "success" || echo "failed"
+    popd >/dev/null
+}
+
 build_fsck() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-fsck      "
@@ -347,6 +356,21 @@ build_snapshot() {
     popd >/dev/null
 }
 
+build_libsdkpre() {
+    case `uname` in
+        Linux)
+            TargetFile=${1:-${BuildBinPath}/libcfs.so}
+            ;;
+        *)
+            echo "Unsupported platform"
+            exit 1
+            ;;
+    esac
+    pushd $SrcPath > /dev/null
+    echo -n "build libsdk: libcfs.so"
+    CGO_ENABLED=1 go build $MODFLAGS -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -buildmode c-shared -o ${TargetFile} ${SrcPath}/libsdk/*.go && echo "success" || echo "failed"
+    popd > /dev/null
+}
 
 build_libsdk() {
     case `uname` in
@@ -470,11 +494,17 @@ case "$cmd" in
     "cli")
         build_cli
         ;;
+    "deploy")
+        build_cfs_deploy
+        ;;
     "fsck")
         build_fsck
         ;;
     "snapshot")
         build_snapshot
+        ;;
+    "libsdkpre")
+        build_libsdkpre
         ;;
     "libsdk")
         build_libsdk

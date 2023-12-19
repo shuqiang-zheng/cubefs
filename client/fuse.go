@@ -28,7 +28,7 @@ import (
 	"math"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path"
@@ -624,7 +624,24 @@ func mount(opt *proto.MountOptions) (fsConn *fuse.Conn, super *cfs.Super, err er
 	if opt.LocallyProf {
 		pprofAddr = "127.0.0.1:" + opt.Profport
 	}
-	go waitListenAndServe(statusCh, pprofAddr, nil)
+	mainMux := http.NewServeMux()
+	mux := http.NewServeMux()
+	mux.Handle("/debug/pprof", http.HandlerFunc(pprof.Index))
+	mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
+	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+	mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+	mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+	mux.Handle("/debug/", http.HandlerFunc(pprof.Index))
+	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasPrefix(req.URL.Path, "/debug/") {
+			mux.ServeHTTP(w, req)
+		} else {
+			http.DefaultServeMux.ServeHTTP(w, req)
+		}
+	})
+	mainMux.Handle("/", mainHandler)
+
+	go waitListenAndServe(statusCh, pprofAddr, mainMux)
 	if err = <-statusCh; err != nil {
 		daemonize.SignalOutcome(err)
 		return

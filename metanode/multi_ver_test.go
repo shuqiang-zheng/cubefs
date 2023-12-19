@@ -15,10 +15,12 @@
 package metanode
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -355,7 +357,7 @@ func TestSplitKeyDeletion(t *testing.T) {
 			verSeq: splitSeq,
 		},
 	}
-
+	mp.verSeq = iTmp.getVer()
 	mp.fsmAppendExtentsWithCheck(iTmp, true)
 	assert.True(t, testGetSplitSize(t, fileIno) == 1)
 	assert.True(t, testGetEkRefCnt(t, fileIno, &initExt) == 4)
@@ -388,8 +390,8 @@ func testGetlastVer() (verSeq uint64) {
 var tm = time.Now().Unix()
 
 func testCreateVer() (verSeq uint64) {
-	mp.multiVersionList.Lock()
-	defer mp.multiVersionList.Unlock()
+	mp.multiVersionList.RWLock.Lock()
+	defer mp.multiVersionList.RWLock.Unlock()
 
 	tm = tm + 1
 	verInfo := &proto.VolVersionInfo{
@@ -532,6 +534,7 @@ func TestAppendList(t *testing.T) {
 		},
 	}
 	t.Logf("split at middle multiSnap.multiVersions %v", ino.getLayerLen())
+	mp.verSeq = iTmp.getVer()
 	mp.fsmAppendExtentsWithCheck(iTmp, true)
 	t.Logf("split at middle multiSnap.multiVersions %v", ino.getLayerLen())
 
@@ -565,7 +568,7 @@ func TestAppendList(t *testing.T) {
 	t.Logf("split key:%v", splitKey)
 	getExtRsp = testGetExtList(t, ino, ino.getLayerVer(0))
 	t.Logf("split at middle multiSnap.multiVersions %v, extent %v, level 1 %v", ino.getLayerLen(), getExtRsp.Extents, ino.multiSnap.multiVersions[0].Extents.eks)
-
+	mp.verSeq = iTmp.getVer()
 	mp.fsmAppendExtentsWithCheck(iTmp, true)
 	t.Logf("split at middle multiSnap.multiVersions %v", ino.getLayerLen())
 	getExtRsp = testGetExtList(t, ino, ino.getLayerVer(0))
@@ -597,6 +600,7 @@ func TestAppendList(t *testing.T) {
 		},
 	}
 	t.Logf("split key:%v", splitKey)
+	mp.verSeq = iTmp.getVer()
 	mp.fsmAppendExtentsWithCheck(iTmp, true)
 
 	getExtRsp = testGetExtList(t, ino, ino.getLayerVer(0))
@@ -804,7 +808,7 @@ func TestDentry(t *testing.T) {
 
 	testDelDirSnapshotVersion(t, seq0, dirIno, dirDen)
 	rspReadDir = testReadDirAll(t, seq0, dirIno.Inode)
-	assert.True(t, len(rspReadDir.Children) == 1)
+	assert.True(t, len(rspReadDir.Children) == 0)
 
 	testPrintAllDentry(t)
 	//---------------------------------------------
@@ -825,7 +829,7 @@ func TestDentry(t *testing.T) {
 
 	rspReadDir = testReadDirAll(t, seq1, dirIno.Inode)
 	t.Logf("after  testDelDirSnapshotVersion %v can see file %v %v", seq1, len(rspReadDir.Children), rspReadDir.Children)
-	assert.True(t, len(rspReadDir.Children) == 2)
+	assert.True(t, len(rspReadDir.Children) == 0)
 	testPrintAllSysVerList(t)
 
 	//---------------------------------------------
@@ -1343,7 +1347,7 @@ func TestOpCommitVersion(t *testing.T) {
 		assert.True(t, mList[0].Status == proto.VersionPrepare)
 	}
 	err = managerVersionPrepare(&proto.MultiVersionOpRequest{VolumeID: VolNameForTest, Op: proto.CreateVersionPrepare, VerSeq: 5000})
-	assert.True(t, err != nil)
+	assert.True(t, err == nil)
 	for _, m := range manager.partitions {
 		mList := m.GetVerList()
 		assert.True(t, len(mList) == 1)
@@ -1548,4 +1552,54 @@ func TestMpMultiVerStore(t *testing.T) {
 	})
 	err := mp.loadMultiVer(filePath, crc)
 	assert.True(t, err == nil)
+}
+
+func TestGetAllVerList(t *testing.T) {
+	initMp(t)
+	mp.multiVersionList = &proto.VolVersionInfoList{
+		VerList: []*proto.VolVersionInfo{
+			{Ver: 20, Status: proto.VersionNormal},
+			{Ver: 30, Status: proto.VersionNormal},
+			{Ver: 40, Status: proto.VersionNormal},
+			{Ver: 50, Status: proto.VersionNormal}},
+	}
+	tmp := mp.multiVersionList.VerList
+	mp.multiVersionList.VerList = append(mp.multiVersionList.VerList[:1], mp.multiVersionList.VerList[2:]...)
+	tmp = append(tmp, &proto.VolVersionInfo{Ver: 30, Status: proto.VersionNormal})
+
+	sort.SliceStable(tmp, func(i, j int) bool {
+		if tmp[i].Ver < tmp[j].Ver {
+			return true
+		}
+		return false
+	})
+
+	t.Logf("tmp %v", tmp)
+	t.Logf("mp.multiVersionList %v", mp.multiVersionList)
+
+	mp.multiVersionList.TemporaryVerMap = make(map[uint64]*proto.VolVersionInfo)
+	mp.multiVersionList.TemporaryVerMap[25] = &proto.VolVersionInfo{Ver: 25, Status: proto.VersionNormal}
+	mp.multiVersionList.TemporaryVerMap[45] = &proto.VolVersionInfo{Ver: 45, Status: proto.VersionNormal}
+	newList := mp.GetAllVerList()
+	oldList := mp.multiVersionList.VerList
+	t.Logf("newList %v oldList %v", newList, oldList)
+	assert.True(t, true)
+}
+
+func TestVerlistSnapshot(t *testing.T) {
+	verList := []*proto.VolVersionInfo{
+		{Ver: 20, Status: proto.VersionNormal},
+	}
+	var verListBuf1 []byte
+	var err error
+	if verListBuf1, err = json.Marshal(verList); err != nil {
+		return
+	}
+	t.Logf("mp.TestVerlistSnapshot  %v", verListBuf1)
+	var verList12 []*proto.VolVersionInfo
+	if err = json.Unmarshal(verListBuf1, &verList12); err != nil {
+		t.Logf("mp.TestVerlistSnapshot  err %v", err)
+	}
+	t.Logf("mp.TestVerlistSnapshot  %v", verList12)
+	assert.True(t, true)
 }

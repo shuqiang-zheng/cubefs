@@ -51,6 +51,7 @@ type Cluster struct {
 	createVolMutex               sync.RWMutex // create volume mutex
 	mnMutex                      sync.RWMutex // meta node mutex
 	dnMutex                      sync.RWMutex // data node mutex
+	nsMutex                      sync.RWMutex // nodeset mutex
 	badPartitionMutex            sync.RWMutex // BadDataPartitionIds and BadMetaPartitionIds operate mutex
 	leaderInfo                   *LeaderInfo
 	cfg                          *clusterConfig
@@ -630,7 +631,7 @@ func (c *Cluster) scheduleToCheckHeartbeat() {
 	}()
 }
 func (c *Cluster) passAclCheck(ip string) {
-
+	// do nothing
 }
 
 func (c *Cluster) checkLeaderAddr() {
@@ -675,6 +676,9 @@ func (c *Cluster) checkMetaNodeHeartbeat() {
 			}
 			if vol.Forbidden {
 				hbReq.ForbiddenVols = append(hbReq.ForbiddenVols, vol.Name)
+			}
+			if !vol.EnableAuditLog {
+				hbReq.DisableAuditVols = append(hbReq.DisableAuditVols, vol.Name)
 			}
 
 			spaceInfo := vol.uidSpaceManager.getSpaceOp()
@@ -949,12 +953,15 @@ func (c *Cluster) addMetaNode(nodeAddr, zoneName string, nodesetId uint64) (id u
 			return nodesetId, err
 		}
 	} else {
+		c.nsMutex.Lock()
 		ns = zone.getAvailNodeSetForMetaNode()
 		if ns == nil {
 			if ns, err = zone.createNodeSet(c); err != nil {
+				c.nsMutex.Unlock()
 				goto errHandler
 			}
 		}
+		c.nsMutex.Unlock()
 	}
 
 	if id, err = c.idAlloc.allocateCommonID(); err != nil {
@@ -1009,12 +1016,15 @@ func (c *Cluster) addDataNode(nodeAddr, zoneName string, nodesetId uint64) (id u
 			return nodesetId, err
 		}
 	} else {
+		c.nsMutex.Lock()
 		ns = zone.getAvailNodeSetForDataNode()
 		if ns == nil {
 			if ns, err = zone.createNodeSet(c); err != nil {
+				c.nsMutex.Unlock()
 				goto errHandler
 			}
 		}
+		c.nsMutex.Unlock()
 	}
 	// allocate dataNode id
 	if id, err = c.idAlloc.allocateCommonID(); err != nil {
@@ -1287,6 +1297,27 @@ func (c *Cluster) markDeleteVol(name, authKey string, force bool) (err error) {
 	if vol, err = c.getVol(name); err != nil {
 		log.LogErrorf("action[markDeleteVol] err[%v]", err)
 		return proto.ErrVolNotExists
+	}
+
+	if !c.cfg.volForceDeletion {
+		volDentryCount := uint64(0)
+		mpsCopy := vol.cloneMetaPartitionMap()
+		for _, mp := range mpsCopy {
+			// to avoid latency, fetch latest mp dentry count from metanode
+			c.doLoadMetaPartition(mp)
+			mpDentryCount := uint64(0)
+			for _, response := range mp.LoadResponse {
+				if response.DentryCount > mpDentryCount {
+					mpDentryCount = response.DentryCount
+				}
+			}
+			volDentryCount += mpDentryCount
+		}
+
+		if volDentryCount > c.cfg.volDeletionDentryThreshold {
+			return fmt.Errorf("vol %s is not empty ! it's dentry count %d > dentry count deletion threshold %d, deletion not permitted ! ",
+				vol.Name, volDentryCount, c.cfg.volDeletionDentryThreshold)
+		}
 	}
 
 	if proto.IsCold(vol.VolType) && vol.totalUsedSpace() > 0 && !force {
@@ -1724,7 +1755,11 @@ result:
 func (c *Cluster) dataNode(addr string) (dataNode *DataNode, err error) {
 	value, ok := c.dataNodes.Load(addr)
 	if !ok {
-		err = errors.Trace(dataNodeNotFound(addr), "%v not found", addr)
+		if !c.IsLeader() {
+			err = errors.New("meta data for data nodes is cleared due to leader change!")
+		} else {
+			err = errors.Trace(dataNodeNotFound(addr), "%v not found", addr)
+		}
 		return
 	}
 
@@ -1735,7 +1770,11 @@ func (c *Cluster) dataNode(addr string) (dataNode *DataNode, err error) {
 func (c *Cluster) metaNode(addr string) (metaNode *MetaNode, err error) {
 	value, ok := c.metaNodes.Load(addr)
 	if !ok {
-		err = errors.Trace(metaNodeNotFound(addr), "%v not found", addr)
+		if !c.IsLeader() {
+			err = errors.New("meta data for meta nodes is cleared due to leader change!")
+		} else {
+			err = errors.Trace(metaNodeNotFound(addr), "%v not found", addr)
+		}
 		return
 	}
 	metaNode = value.(*MetaNode)
@@ -2304,7 +2343,7 @@ func (c *Cluster) migrateDataPartition(srcAddr, targetAddr string, dp *DataParti
 	c.syncUpdateDataPartition(dp)
 	dp.RUnlock()
 
-	log.LogWarnf("clusterID[%v] partitionID:%v  on node:%v offline success,newHost[%v],PersistenceHosts:[%v]",
+	log.LogWarnf("[migrateDataPartition] clusterID[%v] partitionID:%v  on node:%v offline success,newHost[%v],PersistenceHosts:[%v]",
 		c.Name, dp.PartitionID, srcAddr, newAddr, dp.Hosts)
 	dp.SetSpecialReplicaDecommissionStep(SpecialDecommissionInitial)
 	return
@@ -2373,7 +2412,6 @@ func (c *Cluster) validateDecommissionDataPartition(dp *DataPartition, offlineAd
 }
 
 func (c *Cluster) addDataReplica(dp *DataPartition, addr string) (err error) {
-	log.LogDebugf("[addDataReplica]dp %v  addDataReplica %v", dp.PartitionID, addr)
 	defer func() {
 		if err != nil {
 			log.LogErrorf("action[addDataReplica],vol[%v],dp %v ,err[%v]", dp.VolName, dp.PartitionID, err)
@@ -2395,7 +2433,7 @@ func (c *Cluster) addDataReplica(dp *DataPartition, addr string) (err error) {
 	addPeer := proto.Peer{ID: dataNode.ID, Addr: addr}
 
 	if !proto.IsNormalDp(dp.PartitionType) {
-		return fmt.Errorf("[%d] is not normal dp, not support add or delete replica", dp.PartitionID)
+		return fmt.Errorf("action[addDataReplica] [%d] is not normal dp, not support add or delete replica", dp.PartitionID)
 	}
 
 	log.LogInfof("action[addDataReplica] dp %v dst addr %v try add raft member, node id %v", dp.PartitionID, addr, dataNode.ID)
@@ -2695,7 +2733,6 @@ func (c *Cluster) deleteDataReplica(dp *DataPartition, dataNode *DataNode) (err 
 		dp.Unlock()
 		return
 	}
-
 	task := dp.createTaskToDeleteDataPartition(dataNode.Addr)
 	dp.Unlock()
 
@@ -2866,9 +2903,7 @@ func (c *Cluster) migrateMetaNode(srcAddr, targetAddr string, limit int) (err er
 		return fmt.Errorf("migrateMataNode no partition can migrate from [%s] to [%s] limit [%v]", srcAddr, targetAddr, limit)
 	}
 
-	if limit <= 0 && targetAddr == "" { // default all mps
-		limit = len(toBeOfflineMps)
-	} else if limit <= 0 {
+	if limit <= 0 {
 		limit = defaultMigrateMpCnt
 	}
 
@@ -3168,10 +3203,10 @@ func (c *Cluster) doCreateVol(req *createVolReq) (vol *Vol, err error) {
 	var createTime = time.Now().Unix() // record unix seconds of volume create time
 	var dataPartitionSize uint64
 
-	if req.size*util.GB == 0 {
+	if req.dpSize*util.GB == 0 {
 		dataPartitionSize = util.DefaultDataPartitionSize
 	} else {
-		dataPartitionSize = uint64(req.size) * util.GB
+		dataPartitionSize = uint64(req.dpSize) * util.GB
 	}
 
 	vv := volValue{
@@ -3710,7 +3745,7 @@ func (c *Cluster) clearMetaNodes() {
 func (c *Cluster) scheduleToCheckDecommissionDataNode() {
 	go func() {
 		for {
-			if c.partition.IsRaftLeader() {
+			if c.partition.IsRaftLeader() && c.metaReady {
 				c.checkDecommissionDataNode()
 			}
 			time.Sleep(10 * time.Second)
@@ -3852,7 +3887,7 @@ func (c *Cluster) TryDecommissionDataNode(dataNode *DataNode) {
 			break
 		}
 		if left-dpCnt >= 0 {
-			err = c.migrateDisk(dataNode.Addr, disk, dataNode.DecommissionDstAddr, dataNode.DecommissionRaftForce, dpCnt, false, ManualDecommission)
+			err = c.migrateDisk(dataNode.Addr, disk, dataNode.DecommissionDstAddr, dataNode.DecommissionRaftForce, dpCnt, true, ManualDecommission)
 			if err != nil {
 				log.LogWarnf("action[TryDecommissionDataNode] %v failed", err)
 				continue
@@ -3860,7 +3895,7 @@ func (c *Cluster) TryDecommissionDataNode(dataNode *DataNode) {
 			decommissionDpTotal += dpCnt
 			left = left - dpCnt
 		} else {
-			err = c.migrateDisk(dataNode.Addr, disk, dataNode.DecommissionDstAddr, dataNode.DecommissionRaftForce, left, false, ManualDecommission)
+			err = c.migrateDisk(dataNode.Addr, disk, dataNode.DecommissionDstAddr, dataNode.DecommissionRaftForce, left, true, ManualDecommission)
 			if err != nil {
 				log.LogWarnf("action[TryDecommissionDataNode] %v failed", err)
 				continue
@@ -3959,7 +3994,7 @@ func (c *Cluster) restoreStoppedAutoDecommissionDisk(nodeAddr, diskPath string) 
 func (c *Cluster) scheduleToCheckDecommissionDisk() {
 	go func() {
 		for {
-			if c.partition.IsRaftLeader() {
+			if c.partition.IsRaftLeader() && c.metaReady {
 				c.checkDecommissionDisk()
 			}
 			time.Sleep(10 * time.Second)
@@ -3972,7 +4007,7 @@ func (c *Cluster) checkDecommissionDisk() {
 	c.DecommissionDisks.Range(func(key, value interface{}) bool {
 		disk := value.(*DecommissionDisk)
 		status := disk.GetDecommissionStatus()
-		if status == DecommissionSuccess {
+		if status == DecommissionSuccess || status == DecommissionFail {
 			if time.Now().Sub(time.Unix(disk.DecommissionCompleteTime, 0)) > (20 * time.Minute) {
 				if err := c.syncDeleteDecommissionDisk(disk); err != nil {
 					msg := fmt.Sprintf("action[checkDecommissionDisk],clusterID[%v] node[%v] disk[%v],"+
@@ -3981,8 +4016,8 @@ func (c *Cluster) checkDecommissionDisk() {
 					log.LogWarnf("%s", msg)
 				} else {
 					c.delDecommissionDiskFromCache(disk)
-					log.LogDebugf("action[checkDecommissionDisk] delete DecommissionDisk[%s] "+
-						"for decommission success", disk.GenerateKey())
+					log.LogDebugf("action[checkDecommissionDisk] delete DecommissionDisk[%s] status(%v)",
+						disk.GenerateKey(), status)
 				}
 			}
 		}
@@ -4243,30 +4278,35 @@ func (c *Cluster) addLcNode(nodeAddr string) (id uint64, err error) {
 	var ln *LcNode
 	if value, ok := c.lcNodes.Load(nodeAddr); ok {
 		ln = value.(*LcNode)
+		ln.ReportTime = time.Now()
+		ln.clean()
+		ln.TaskManager = newAdminTaskManager(ln.Addr, c.Name)
 		log.LogInfof("action[addLcNode] already add nodeAddr: %v, id: %v", nodeAddr, ln.ID)
-		return ln.ID, nil
+	} else {
+		ln = newLcNode(nodeAddr, c.Name)
+		// allocate LcNode id
+		if id, err = c.idAlloc.allocateCommonID(); err != nil {
+			goto errHandler
+		}
+		ln.ID = id
+		log.LogInfof("action[addLcNode] allocateCommonID: %v", id)
 	}
-	ln = newLcNode(nodeAddr, c.Name)
-	// allocate LcNode id
-	if id, err = c.idAlloc.allocateCommonID(); err != nil {
-		goto errHandler
-	}
-	ln.ID = id
-	log.LogInfof("action[addLcNode] allocateCommonID: %v", id)
+
 	if err = c.syncAddLcNode(ln); err != nil {
 		goto errHandler
 	}
 	c.lcNodes.Store(nodeAddr, ln)
+
 	c.lcMgr.lcNodeStatus.Lock()
-	delete(c.lcMgr.lcNodeStatus.workingNodes, nodeAddr)
-	c.lcMgr.lcNodeStatus.idleNodes[nodeAddr] = nodeAddr
+	c.lcMgr.lcNodeStatus.WorkingCount[nodeAddr] = 0
 	c.lcMgr.lcNodeStatus.Unlock()
+
 	c.snapshotMgr.lcNodeStatus.Lock()
-	delete(c.snapshotMgr.lcNodeStatus.workingNodes, nodeAddr)
-	c.snapshotMgr.lcNodeStatus.idleNodes[nodeAddr] = nodeAddr
+	c.snapshotMgr.lcNodeStatus.WorkingCount[nodeAddr] = 0
 	c.snapshotMgr.lcNodeStatus.Unlock()
 	log.LogInfof("action[addLcNode], clusterID[%v], lcNodeAddr: %v, id: %v, add idleNodes", c.Name, nodeAddr, ln.ID)
-	return
+	return ln.ID, nil
+
 errHandler:
 	err = fmt.Errorf("action[addLcNode],clusterID[%v] lcNodeAddr:%v err:%v ", c.Name, nodeAddr, err.Error())
 	log.LogError(errors.Stack(err))
@@ -4275,33 +4315,33 @@ errHandler:
 }
 
 type LcNodeStatInfo struct {
-	Addr   string
-	TaskId string
+	Addr string
 }
 
 type LcNodeInfoResponse struct {
-	Infos               []*LcNodeStatInfo
-	LcConfigurations    map[string]*proto.LcConfiguration
-	LcRuleTaskStatus    *lcRuleTaskStatus
-	LcSnapshotVerStatus *lcSnapshotVerStatus
+	RegisterInfos      []*LcNodeStatInfo
+	LcConfigurations   map[string]*proto.LcConfiguration
+	LcRuleTaskStatus   *lcRuleTaskStatus
+	LcNodeStatus       *lcNodeStatus
+	SnapshotVerStatus  *lcSnapshotVerStatus
+	SnapshotNodeStatus *lcNodeStatus
 }
 
 func (c *Cluster) getAllLcNodeInfo() (rsp *LcNodeInfoResponse, err error) {
 	rsp = &LcNodeInfoResponse{
-		Infos: make([]*LcNodeStatInfo, 0),
+		RegisterInfos: make([]*LcNodeStatInfo, 0),
 	}
 	c.lcNodes.Range(func(addr, value interface{}) bool {
-		TaskId := c.lcMgr.lcNodeStatus.workingNodes[addr.(string)]
-		ln := &LcNodeStatInfo{
-			Addr:   addr.(string),
-			TaskId: TaskId,
-		}
-		rsp.Infos = append(rsp.Infos, ln)
+		rsp.RegisterInfos = append(rsp.RegisterInfos, &LcNodeStatInfo{
+			Addr: addr.(string),
+		})
 		return true
 	})
 	rsp.LcConfigurations = c.lcMgr.lcConfigurations
 	rsp.LcRuleTaskStatus = c.lcMgr.lcRuleTaskStatus
-	rsp.LcSnapshotVerStatus = c.snapshotMgr.lcSnapshotTaskStatus
+	rsp.LcNodeStatus = c.lcMgr.lcNodeStatus
+	rsp.SnapshotVerStatus = c.snapshotMgr.lcSnapshotTaskStatus
+	rsp.SnapshotNodeStatus = c.snapshotMgr.lcNodeStatus
 	return
 }
 
@@ -4315,8 +4355,8 @@ func (c *Cluster) clearLcNodes() {
 }
 
 func (c *Cluster) delLcNode(nodeAddr string) (err error) {
-	c.lcMgr.lcRuleTaskStatus.RedoTask(c.lcMgr.lcNodeStatus.RemoveNode(nodeAddr))
-	c.snapshotMgr.lcSnapshotTaskStatus.RedoTask(c.snapshotMgr.lcNodeStatus.RemoveNode(nodeAddr))
+	c.lcMgr.lcNodeStatus.RemoveNode(nodeAddr)
+	c.snapshotMgr.lcNodeStatus.RemoveNode(nodeAddr)
 
 	lcNode, err := c.lcNode(nodeAddr)
 	if err != nil {

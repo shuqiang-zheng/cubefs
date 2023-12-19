@@ -128,11 +128,10 @@ func (s *LcScanner) Start() (err error) {
 	if err != nil {
 		log.LogErrorf("startScan err(%v): volume(%v), rule id(%v), scanning done!",
 			err, s.Volume, s.rule.ID)
-		t := time.Now()
 		response.ID = s.ID
-		response.EndTime = &t
-		response.Status = proto.TaskSucceeds
-		response.Done = true
+		response.LcNode = s.lcnode.localServerAddr
+		response.Status = proto.TaskFailed
+		response.Result = err.Error()
 
 		s.lcnode.scannerMutex.Lock()
 		delete(s.lcnode.lcScanners, s.ID)
@@ -276,7 +275,9 @@ func (s *LcScanner) scan() {
 					return
 				}
 				dentry := val.(*proto.ScanDentry)
-				job := func() {}
+				job := func() {
+					// do nothing
+				}
 				if s.dirChan.Len() > maxDirChanNum {
 					job = func() {
 						s.handleDirLimitDepthFirst(dentry)
@@ -520,6 +521,7 @@ func (s *LcScanner) checkScanning() {
 					response.Status = proto.TaskSucceeds
 					response.Done = true
 					response.ID = s.ID
+					response.LcNode = s.lcnode.localServerAddr
 					response.Volume = s.Volume
 					response.RuleId = s.rule.ID
 					response.ExpiredNum = s.currentStat.ExpiredNum
@@ -529,8 +531,8 @@ func (s *LcScanner) checkScanning() {
 					response.ErrorSkippedNum = s.currentStat.ErrorSkippedNum
 
 					s.lcnode.scannerMutex.Lock()
-					delete(s.lcnode.lcScanners, s.ID)
 					s.Stop()
+					delete(s.lcnode.lcScanners, s.ID)
 					s.lcnode.scannerMutex.Unlock()
 
 					s.lcnode.respondToMaster(s.adminTask)
@@ -555,5 +557,6 @@ func (s *LcScanner) Stop() {
 	s.dirRPoll.WaitAndClose()
 	close(s.dirChan.In)
 	close(s.fileChan.In)
+	s.mw.Close()
 	log.LogInfof("scanner(%v) stopped", s.ID)
 }

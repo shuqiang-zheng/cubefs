@@ -32,13 +32,15 @@ type LeaderInfo struct {
 func (m *Server) handleLeaderChange(leader uint64) {
 	if leader == 0 {
 		log.LogWarnf("action[handleLeaderChange] but no leader")
-		WarnMetrics.reset()
+		if WarnMetrics != nil {
+			WarnMetrics.reset()
+		}
 		return
 	}
 
 	oldLeaderAddr := m.leaderInfo.addr
 	m.leaderInfo.addr = AddrDatabase[leader]
-	log.LogWarnf("action[handleLeaderChange] change leader to [%v] ", m.leaderInfo.addr)
+	log.LogWarnf("action[handleLeaderChange]  [%v] ", m.leaderInfo.addr)
 	m.reverseProxy = m.newReverseProxy()
 
 	if m.id == leader {
@@ -64,7 +66,9 @@ func (m *Server) handleLeaderChange(leader uint64) {
 		m.cluster.metaReady = false
 		m.cluster.masterClient.AddNode(m.leaderInfo.addr)
 		m.cluster.masterClient.SetLeader(m.leaderInfo.addr)
-		WarnMetrics.reset()
+		if WarnMetrics != nil {
+			WarnMetrics.reset()
+		}
 	}
 }
 
@@ -84,6 +88,8 @@ func (m *Server) handlePeerChange(confChange *proto.ConfChange) (err error) {
 	case proto.ConfRemoveNode:
 		m.raftStore.DeleteNode(confChange.Peer.ID)
 		msg = fmt.Sprintf("clusterID[%v] peerID:%v,nodeAddr[%v] has been removed", m.clusterName, confChange.Peer.ID, addr)
+	default:
+		// do nothing
 	}
 	Warn(m.clusterName, msg)
 	return

@@ -83,7 +83,7 @@ func (s *DataNode) OperatePacket(p *repl.Packet, c net.Conn) (err error) {
 		tpLabels map[string]string
 		tpObject *exporter.TimePointCount
 	)
-
+	log.LogDebugf("action[OperatePacket] %v, pack [%v]", p.GetOpMsg(), p)
 	shallDegrade := p.ShallDegrade()
 	sz := p.Size
 	if !shallDegrade {
@@ -214,8 +214,9 @@ func (s *DataNode) handlePacketToCreateExtent(p *repl.Packet) {
 	}
 
 	partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
-
-	err = partition.ExtentStore().Create(p.ExtentID)
+	partition.disk.limitWrite.Run(0, func() {
+		err = partition.ExtentStore().Create(p.ExtentID)
+	})
 }
 
 // Handle OpCreateDataPartition packet.
@@ -265,7 +266,7 @@ func (s *DataNode) commitDelVersion(volumeID string, verSeq uint64) (err error) 
 			continue
 		}
 		verListMgr := partition.volVersionInfoList
-		verListMgr.Lock()
+		verListMgr.RWLock.Lock()
 		for i, ver := range verListMgr.VerList {
 			if i == len(verListMgr.VerList)-1 {
 				log.LogWarnf("action[fsmVersionOp] mp[%v] seq %v, seqArray size %v newest ver %v",
@@ -273,19 +274,18 @@ func (s *DataNode) commitDelVersion(volumeID string, verSeq uint64) (err error) 
 				break
 			}
 			if ver.Ver == verSeq {
-				log.LogInfof("action[fsmVersionOp] mp[%v] seq %v,seqArray size %v", partition.config.PartitionID, verSeq, len(verListMgr.VerList))
+				log.LogInfof("action[fsmVersionOp] updateVerList mp[%v] seq %v,seqArray size %v", partition.config.PartitionID, verSeq, len(verListMgr.VerList))
 				// mp.multiVersionList = append(mp.multiVersionList[:i], mp.multiVersionList[i+1:]...)
 				verListMgr.VerList = append(verListMgr.VerList[:i], verListMgr.VerList[i+1:]...)
 				break
 			}
 		}
-		verListMgr.Unlock()
+		verListMgr.RWLock.Unlock()
 	}
 	return
 }
 
 func (s *DataNode) commitCreateVersion(req *proto.MultiVersionOpRequest) (err error) {
-
 	log.LogInfof("action[commitCreateVersion] handle master version reqeust seq %v", req.VerSeq)
 	if value, ok := s.volUpdating.Load(req.VolumeID); ok {
 		ver2Phase := value.(*verOp2Phase)
@@ -305,45 +305,50 @@ func (s *DataNode) commitCreateVersion(req *proto.MultiVersionOpRequest) (err er
 			if partition.config.VolName != req.VolumeID {
 				continue
 			}
-			partition.volVersionInfoList.Lock()
-			cnt := len(partition.volVersionInfoList.VerList)
-			if cnt > 0 && partition.volVersionInfoList.VerList[cnt-1].Ver >= req.VerSeq {
-				log.LogWarnf("action[commitCreateVersion] reqeust seq %v lessOrEqual last exist snapshot seq %v",
-					partition.volVersionInfoList.VerList[cnt-1].Ver, req.VerSeq)
-				partition.volVersionInfoList.Unlock()
+
+			partition.volVersionInfoList.RWLock.Lock()
+			if len(partition.volVersionInfoList.VerList) == 0 {
+				partition.volVersionInfoList.VerList = req.VolVerList
+				partition.verSeq = req.VerSeq
+				log.LogInfof("action[commitCreateVersion] updateVerList reqeust ver %v verlist  %v  dp verlist nil and set", req.VerSeq, req.VolVerList)
+				partition.volVersionInfoList.RWLock.Unlock()
 				continue
 			}
 
-			if req.Op == proto.CreateVersionPrepare {
-				partition.volVersionInfoList.VerList = append(partition.volVersionInfoList.VerList, &proto.VolVersionInfo{
-					Status: proto.VersionPrepare,
-					Ver:    req.VerSeq,
-				})
-				log.LogDebugf("action[commitCreateVersion] reqeust add new seq %v verlist (%v)", req.VerSeq, partition.volVersionInfoList)
-				partition.verSeq = req.VerSeq
-			} else {
-				vlen := len(partition.volVersionInfoList.VerList)
-				lastVer := partition.volVersionInfoList.VerList[vlen-1]
-				if lastVer.Ver != req.VerSeq {
-					log.LogWarnf("action[commitCreateVersion] reqeust seq %v not equal lastVer %v dp verlist (%v) master verlist (%v)",
-						req.VerSeq, lastVer, partition.volVersionInfoList, req.VolVerList)
-					partition.volVersionInfoList.VerList = req.VolVerList
-					partition.verSeq = req.VerSeq
-					partition.volVersionInfoList.Unlock()
-					continue
+			lastVerInfo := partition.volVersionInfoList.GetLastVolVerInfo()
+			log.LogInfof("action[commitCreateVersion] reqeust seq %v lessOrEqual last exist snapshot seq %v op %v",
+				lastVerInfo.Ver, req.VerSeq, req.Op)
+
+			if lastVerInfo.Ver >= req.VerSeq {
+				if lastVerInfo.Ver == req.VerSeq {
+					if req.Op == proto.CreateVersionCommit {
+						lastVerInfo.Status = proto.VersionNormal
+					}
 				}
-				lastVer.Status = proto.VersionNormal
+				partition.volVersionInfoList.RWLock.Unlock()
+				continue
 			}
 
-			partition.volVersionInfoList.Unlock()
+			var status uint8 = proto.VersionPrepare
+			if req.Op == proto.CreateVersionCommit {
+				status = proto.VersionNormal
+			}
+			partition.volVersionInfoList.VerList = append(partition.volVersionInfoList.VerList, &proto.VolVersionInfo{
+				Status: status,
+				Ver:    req.VerSeq,
+			})
+			log.LogInfof("action[commitCreateVersion] updateVerList reqeust add new seq %v verlist (%v)", req.VerSeq, partition.volVersionInfoList)
+			partition.verSeq = req.VerSeq
+			partition.volVersionInfoList.RWLock.Unlock()
 		}
+
 		if req.Op == proto.CreateVersionPrepare {
 			return
 		}
 		ver2Phase.verSeq = req.VerSeq
 		ver2Phase.step = proto.CreateVersionCommit
 		ver2Phase.status = proto.VersionWorkingFinished
-		log.LogWarnf("action[commitCreateVersion] commit volume %v prepare seq %v with commit seq %v",
+		log.LogInfof("action[commitCreateVersion] commit volume %v prepare seq %v with commit seq %v",
 			req.VolumeID, ver2Phase.verPrepare, req.VerSeq)
 
 		return
@@ -452,7 +457,6 @@ end:
 		log.LogErrorf(err.Error())
 		return
 	}
-
 }
 
 func (s *DataNode) checkVolumeForbidden(volNames []string) {
@@ -466,6 +470,26 @@ func (s *DataNode) checkVolumeForbidden(volNames []string) {
 		partition.SetForbidden(false)
 		return true
 	})
+}
+
+func (s *DataNode) checkDecommissionDisks(decommissionDisks []string) {
+	decommissionDiskSet := util.NewSet()
+	for _, disk := range decommissionDisks {
+		decommissionDiskSet.Add(disk)
+	}
+	disks := s.space.GetDisks()
+	for _, disk := range disks {
+		if disk.GetDecommissionStatus() && !decommissionDiskSet.Has(disk.Path) {
+			log.LogDebugf("action[checkDecommissionDisks] mark %v to be undecommissioned", disk.Path)
+			disk.MarkDecommissionStatus(false)
+			continue
+		}
+		if !disk.GetDecommissionStatus() && decommissionDiskSet.Has(disk.Path) {
+			log.LogDebugf("action[checkDecommissionDisks] mark %v to be decommissioned", disk.Path)
+			disk.MarkDecommissionStatus(true)
+			continue
+		}
+	}
 }
 
 // Handle OpHeartbeat packet.
@@ -501,25 +525,24 @@ func (s *DataNode) handleHeartbeatPacket(p *repl.Packet) {
 
 			// set volume forbidden
 			s.checkVolumeForbidden(request.ForbiddenVols)
-
+			// set decommission disks
+			s.checkDecommissionDisks(request.DecommissionDisks)
 			s.diskQosEnableFromMaster = request.EnableDiskQos
 
 			var needUpdate bool
-			if request.QosFlowWriteLimit > 0 && request.QosFlowWriteLimit != s.diskFlowWriteLimit {
-				s.diskFlowWriteLimit = request.QosFlowWriteLimit
-				needUpdate = true
-			}
-			if request.QosFlowReadLimit > 0 && request.QosFlowReadLimit != s.diskFlowReadLimit {
-				s.diskFlowReadLimit = request.QosFlowReadLimit
-				needUpdate = true
-			}
-			if request.QosIopsWriteLimit > 0 && request.QosIopsWriteLimit != s.diskIopsWriteLimit {
-				s.diskIopsWriteLimit = request.QosIopsWriteLimit
-				needUpdate = true
-			}
-			if request.QosIopsReadLimit > 0 && request.QosIopsReadLimit != s.diskIopsReadLimit {
-				s.diskIopsReadLimit = request.QosIopsReadLimit
-				needUpdate = true
+			for _, pair := range []struct {
+				replace uint64
+				origin  *int
+			}{
+				{request.QosFlowWriteLimit, &s.diskWriteFlow},
+				{request.QosFlowReadLimit, &s.diskReadFlow},
+				{request.QosIopsWriteLimit, &s.diskWriteIops},
+				{request.QosIopsReadLimit, &s.diskReadIops},
+			} {
+				if pair.replace > 0 && int(pair.replace) != *pair.origin {
+					*pair.origin = int(pair.replace)
+					needUpdate = true
+				}
 			}
 
 			// set cpu util and io used in here
@@ -528,10 +551,7 @@ func (s *DataNode) handleHeartbeatPacket(p *repl.Packet) {
 
 			if needUpdate {
 				log.LogWarnf("action[handleHeartbeatPacket] master change disk qos limit to [flowWrite %v, flowRead %v, iopsWrite %v, iopsRead %v]",
-					s.diskFlowWriteLimit,
-					s.diskFlowReadLimit,
-					s.diskIopsWriteLimit,
-					s.diskIopsReadLimit)
+					s.diskWriteFlow, s.diskReadFlow, s.diskWriteIops, s.diskReadIops)
 				s.updateQosLimit()
 			}
 		} else {
@@ -652,13 +672,17 @@ func (s *DataNode) handleMarkDeletePacket(p *repl.Packet, c net.Conn) {
 			log.LogInfof("handleMarkDeletePacket Delete PartitionID(%v)_Extent(%v)_Offset(%v)_Size(%v)",
 				p.PartitionID, p.ExtentID, ext.ExtentOffset, ext.Size)
 			partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
-			partition.ExtentStore().MarkDelete(p.ExtentID, int64(ext.ExtentOffset), int64(ext.Size))
+			partition.disk.limitWrite.Run(0, func() {
+				partition.ExtentStore().MarkDelete(p.ExtentID, int64(ext.ExtentOffset), int64(ext.Size))
+			})
 		}
 	} else {
 		log.LogInfof("handleMarkDeletePacket Delete PartitionID(%v)_Extent(%v)",
 			p.PartitionID, p.ExtentID)
 		partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
-		partition.ExtentStore().MarkDelete(p.ExtentID, 0, 0)
+		partition.disk.limitWrite.Run(0, func() {
+			partition.ExtentStore().MarkDelete(p.ExtentID, 0, 0)
+		})
 	}
 }
 
@@ -686,7 +710,9 @@ func (s *DataNode) handleBatchMarkDeletePacket(p *repl.Packet, c net.Conn) {
 			if deleteLimiteRater.Allow() {
 				log.LogInfof(fmt.Sprintf("recive DeleteExtent (%v) from (%v)", ext, c.RemoteAddr().String()))
 				partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
-				store.MarkDelete(ext.ExtentId, int64(ext.ExtentOffset), int64(ext.Size))
+				partition.disk.limitWrite.Run(0, func() {
+					store.MarkDelete(ext.ExtentId, int64(ext.ExtentOffset), int64(ext.Size))
+				})
 			} else {
 				log.LogInfof("delete limiter reach(%v), remote (%v) try again.", deleteLimiteRater.Limit(), c.RemoteAddr().String())
 				err = storage.TryAgainError
@@ -734,7 +760,12 @@ func (s *DataNode) handleWritePacket(p *repl.Packet) {
 		partition.disk.allocCheckLimit(proto.FlowWriteType, uint32(p.Size))
 		partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
 
-		_, err = store.Write(p.ExtentID, p.ExtentOffset, int64(p.Size), p.Data, p.CRC, storage.AppendWriteType, p.IsSyncWrite())
+		if writable := partition.disk.limitWrite.TryRun(int(p.Size), func() {
+			_, err = store.Write(p.ExtentID, p.ExtentOffset, int64(p.Size), p.Data, p.CRC, storage.AppendWriteType, p.IsSyncWrite())
+		}); !writable {
+			err = storage.TryAgainError
+			return
+		}
 		if !shallDegrade {
 			s.metrics.MetricIOBytes.AddWithLabels(int64(p.Size), metricPartitionIOLabels)
 			partitionIOMetric.SetWithLabels(err, metricPartitionIOLabels)
@@ -751,7 +782,12 @@ func (s *DataNode) handleWritePacket(p *repl.Packet) {
 		partition.disk.allocCheckLimit(proto.FlowWriteType, uint32(p.Size))
 		partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
 
-		_, err = store.Write(p.ExtentID, p.ExtentOffset, int64(p.Size), p.Data, p.CRC, storage.AppendWriteType, p.IsSyncWrite())
+		if writable := partition.disk.limitWrite.TryRun(int(p.Size), func() {
+			_, err = store.Write(p.ExtentID, p.ExtentOffset, int64(p.Size), p.Data, p.CRC, storage.AppendWriteType, p.IsSyncWrite())
+		}); !writable {
+			err = storage.TryAgainError
+			return
+		}
 		if !shallDegrade {
 			s.metrics.MetricIOBytes.AddWithLabels(int64(p.Size), metricPartitionIOLabels)
 			partitionIOMetric.SetWithLabels(err, metricPartitionIOLabels)
@@ -774,7 +810,12 @@ func (s *DataNode) handleWritePacket(p *repl.Packet) {
 			partition.disk.allocCheckLimit(proto.FlowWriteType, uint32(currSize))
 			partition.disk.allocCheckLimit(proto.IopsWriteType, 1)
 
-			_, err = store.Write(p.ExtentID, p.ExtentOffset+int64(offset), int64(currSize), data, crc, storage.AppendWriteType, p.IsSyncWrite())
+			if writable := partition.disk.limitWrite.TryRun(currSize, func() {
+				_, err = store.Write(p.ExtentID, p.ExtentOffset+int64(offset), int64(currSize), data, crc, storage.AppendWriteType, p.IsSyncWrite())
+			}); !writable {
+				err = storage.TryAgainError
+				return
+			}
 			if !shallDegrade {
 				s.metrics.MetricIOBytes.AddWithLabels(int64(p.Size), metricPartitionIOLabels)
 				partitionIOMetric.SetWithLabels(err, metricPartitionIOLabels)
@@ -954,7 +995,9 @@ func (s *DataNode) extentRepairReadPacket(p *repl.Packet, connect net.Conn, isRe
 		partition.Disk().allocCheckLimit(proto.IopsReadType, 1)
 		partition.Disk().allocCheckLimit(proto.FlowReadType, currReadSize)
 
-		reply.CRC, err = store.Read(reply.ExtentID, offset, int64(currReadSize), reply.Data, isRepairRead)
+		partition.disk.limitRead.Run(int(currReadSize), func() {
+			reply.CRC, err = store.Read(reply.ExtentID, offset, int64(currReadSize), reply.Data, isRepairRead)
+		})
 		if !shallDegrade {
 			s.metrics.MetricIOBytes.AddWithLabels(int64(p.Size), metricPartitionIOLabels)
 			partitionIOMetric.SetWithLabels(err, metricPartitionIOLabels)
@@ -963,6 +1006,7 @@ func (s *DataNode) extentRepairReadPacket(p *repl.Packet, connect net.Conn, isRe
 		partition.checkIsDiskError(err, ReadFlag)
 		p.CRC = reply.CRC
 		if err != nil {
+			log.LogErrorf("action[operatePacket] err %v", err)
 			return
 		}
 		reply.Size = currReadSize
@@ -1316,7 +1360,7 @@ func (s *DataNode) handlePacketToAddDataPartitionRaftMember(p *repl.Packet) {
 		return
 	}
 	p.PartitionID = req.PartitionId
-	if dp.IsExsitReplica(req.AddPeer.Addr) {
+	if dp.IsExistReplica(req.AddPeer.Addr) {
 		log.LogInfof("handlePacketToAddDataPartitionRaftMember recive MasterCommand: %v "+
 			"addRaftAddr(%v) has exsit", string(reqData), req.AddPeer.Addr)
 		return
@@ -1373,20 +1417,20 @@ func (s *DataNode) handlePacketToRemoveDataPartitionRaftMember(p *repl.Packet) {
 		return
 	}
 
-	log.LogWarnf("action[handlePacketToRemoveDataPartitionRaftMember], req %v (%s) RemoveRaftPeer(%s) dp %v replicaNum %v",
+	log.LogDebugf("action[handlePacketToRemoveDataPartitionRaftMember], req %v (%s) RemoveRaftPeer(%s) dp %v replicaNum %v",
 		p.GetReqID(), string(reqData), req.RemovePeer.Addr, dp.partitionID, dp.replicaNum)
 
 	p.PartitionID = req.PartitionId
 
-	if !dp.IsExsitReplica(req.RemovePeer.Addr) {
-		log.LogInfof("action[handlePacketToRemoveDataPartitionRaftMember] receive MasterCommand:  req %v[%v] "+
-			"RemoveRaftPeer(%v) has not exsit", p.GetReqID(), string(reqData), req.RemovePeer.Addr)
+	if !dp.IsExistReplica(req.RemovePeer.Addr) {
+		log.LogWarnf("action[handlePacketToRemoveDataPartitionRaftMember] receive MasterCommand:  req %v[%v] "+
+			"RemoveRaftPeer(%v) has not exist", p.GetReqID(), string(reqData), req.RemovePeer.Addr)
 		return
 	}
 
 	isRaftLeader, err = s.forwardToRaftLeader(dp, p, req.Force)
 	if !isRaftLeader {
-		log.LogInfof("handlePacketToRemoveDataPartitionRaftMember return no leader")
+		log.LogWarnf("handlePacketToRemoveDataPartitionRaftMember return no leader")
 		return
 	}
 	if err = dp.CanRemoveRaftMember(req.RemovePeer, req.Force); err != nil {

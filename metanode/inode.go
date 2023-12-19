@@ -119,7 +119,7 @@ func NewMultiSnap(seq uint64) *InodeMultiSnap {
 	}
 }
 
-func (i *Inode) setVerDoWork(seq uint64) {
+func (i *Inode) verUpdate(seq uint64) {
 	if seq == 0 && i.multiSnap == nil {
 		return
 	}
@@ -131,15 +131,15 @@ func (i *Inode) setVerDoWork(seq uint64) {
 }
 
 func (i *Inode) setVerNoCheck(seq uint64) {
-	i.setVerDoWork(seq)
+	i.verUpdate(seq)
 }
 
 func (i *Inode) setVer(seq uint64) {
 	if i.getVer() > seq {
 		syslog.Println(fmt.Sprintf("inode %v old seq %v cann't use seq %v", i.getVer(), seq, string(debug.Stack())))
-		log.LogFatalf("inode %v old seq %v cann't use seq %v", i.getVer(), seq, string(debug.Stack()))
+		log.LogFatalf("inode %v old seq %v cann't use seq %v stack %v", i.Inode, i.getVer(), seq, string(debug.Stack()))
 	}
-	i.setVerDoWork(seq)
+	i.verUpdate(seq)
 }
 
 func (i *Inode) insertEkRefMap(mpId uint64, ek *proto.ExtentKey) {
@@ -152,11 +152,18 @@ func (i *Inode) insertEkRefMap(mpId uint64, ek *proto.ExtentKey) {
 	storeEkSplit(mpId, i.Inode, i.multiSnap.ekRefMap, ek)
 }
 
-func (i *Inode) getEkRefMap() *sync.Map {
+func (i *Inode) isEkInRefMap(mpId uint64, ek *proto.ExtentKey) (ok bool) {
 	if i.multiSnap == nil {
-		return nil
+		return
 	}
-	return i.multiSnap.ekRefMap
+	if i.multiSnap.ekRefMap == nil {
+		log.LogErrorf("[storeEkSplit] mpId [%v] inodeID %v ekRef nil", mpId, i.Inode)
+		return
+	}
+	log.LogDebugf("[storeEkSplit] mpId [%v] inode %v mp %v extent id %v ek %v", mpId, i.Inode, ek.PartitionId, ek.ExtentId, ek)
+	id := ek.PartitionId<<32 | ek.ExtentId
+	_, ok = i.multiSnap.ekRefMap.Load(id)
+	return
 }
 
 func (i *Inode) getVer() uint64 {
@@ -706,6 +713,7 @@ func (i *Inode) MarshalValue() (val []byte) {
 		log.LogFatalf("action[MarshalValue] inode %v current verseq %v, hist len (%v) stack(%v)", i.Inode, i.getVer(), i.getLayerLen(), string(debug.Stack()))
 	}
 	if err = binary.Write(buff, binary.BigEndian, int32(i.getLayerLen())); err != nil {
+		i.RUnlock()
 		panic(err)
 	}
 
@@ -794,10 +802,12 @@ func (i *Inode) UnmarshalInodeValue(buff *bytes.Buffer) (err error) {
 			if err, ekRef = i.Extents.UnmarshalBinary(extBytes, v3); err != nil {
 				return
 			}
+			// log.LogDebugf("Inode %v ekRef %v", i.Inode, ekRef)
 			if ekRef != nil {
 				if i.multiSnap == nil {
 					i.multiSnap = NewMultiSnap(0)
 				}
+				// log.LogDebugf("Inode %v ekRef %v", i.Inode, ekRef)
 				i.multiSnap.ekRefMap = ekRef
 			}
 		}
@@ -868,13 +878,13 @@ func (i *Inode) UnmarshalValue(val []byte) (err error) {
 				if i.multiSnap.ekRefMap == nil {
 					i.multiSnap.ekRefMap = new(sync.Map)
 				}
-				//log.LogDebugf("UnmarshalValue. inode %v merge top layer multiSnap.ekRefMap with layer %v", i.Inode, idx)
+				// log.LogDebugf("UnmarshalValue. inode %v merge top layer multiSnap.ekRefMap with layer %v", i.Inode, idx)
 				proto.MergeSplitKey(i.Inode, i.multiSnap.ekRefMap, ino.multiSnap.ekRefMap)
 			}
 			if i.multiSnap == nil {
 				i.multiSnap = &InodeMultiSnap{}
 			}
-			//log.LogDebugf("action[UnmarshalValue] inode %v old seq %v hist len %v", ino.Inode, ino.getVer(), i.getLayerLen())
+			// log.LogDebugf("action[UnmarshalValue] inode %v old seq %v hist len %v", ino.Inode, ino.getVer(), i.getLayerLen())
 			i.multiSnap.multiVersions = append(i.multiSnap.multiVersions, ino)
 		}
 	}
@@ -1152,8 +1162,8 @@ func (inode *Inode) dirUnlinkVerInlist(ino *Inode, mpVer uint64, verlist *proto.
 		inode.Inode, mIdx, dIno.getVer(), endSeq)
 
 	doWork := func() bool {
-		verlist.RLock()
-		defer verlist.RUnlock()
+		verlist.RWLock.RLock()
+		defer verlist.RWLock.RUnlock()
 
 		for vidx, info := range verlist.VerList {
 			if info.Ver >= dIno.getVer() && info.Ver < endSeq {
@@ -1222,8 +1232,8 @@ func (inode *Inode) unlinkVerInList(mpId uint64, ino *Inode, mpVer uint64, verli
 }
 
 func (i *Inode) getLastestVer(reqVerSeq uint64, commit bool, verlist *proto.VolVersionInfoList) (uint64, bool) {
-	verlist.RLock()
-	defer verlist.RUnlock()
+	verlist.RWLock.RLock()
+	defer verlist.RWLock.RUnlock()
 
 	if len(verlist.VerList) == 0 {
 		return 0, false
@@ -1338,8 +1348,8 @@ func (ino *Inode) getInoByVer(verSeq uint64, equal bool) (i *Inode, idx int) {
 
 func (i *Inode) getAndDelVer(mpId uint64, dVer uint64, mpVer uint64, verlist *proto.VolVersionInfoList) (delExtents []proto.ExtentKey, ino *Inode) {
 	var err error
-	verlist.RLock()
-	defer verlist.RUnlock()
+	verlist.RWLock.RLock()
+	defer verlist.RWLock.RUnlock()
 
 	log.LogDebugf("action[getAndDelVer] ino %v verSeq %v request del ver %v hist len %v isTmpFile %v",
 		i.Inode, i.getVer(), dVer, i.getLayerLen(), i.IsTempFile())
@@ -1410,7 +1420,7 @@ func (i *Inode) getAndDelVer(mpId uint64, dVer uint64, mpVer uint64, verlist *pr
 				log.LogDebugf("action[getAndDelVer] ino %v  get next version in verList update ver from %v to %v.And delete exts with ver %v",
 					i.Inode, i.multiSnap.multiVersions[id].getVer(), nVerSeq, dVer)
 
-				i.multiSnap.multiVersions[id].setVer(nVerSeq)
+				i.multiSnap.multiVersions[id].setVerNoCheck(nVerSeq)
 				delExtents, ino = i.MultiLayerClearExtByVer(id+1, nVerSeq), i.multiSnap.multiVersions[id]
 				if len(i.multiSnap.multiVersions[id].Extents.eks) != 0 {
 					log.LogDebugf("action[getAndDelVer] ino %v   after clear self still have ext and left", i.Inode)
@@ -1435,8 +1445,8 @@ func (i *Inode) getAndDelVer(mpId uint64, dVer uint64, mpVer uint64, verlist *pr
 }
 
 func (i *Inode) getNextOlderVer(ver uint64, verlist *proto.VolVersionInfoList) (verSeq uint64, err error) {
-	verlist.RLock()
-	defer verlist.RUnlock()
+	verlist.RWLock.RLock()
+	defer verlist.RWLock.RUnlock()
 	log.LogDebugf("getNextOlderVer inode %v ver %v", i.Inode, ver)
 	for idx, info := range verlist.VerList {
 		log.LogDebugf("getNextOlderVer inode %v id %v ver %v info %v", i.Inode, idx, info.Ver, info)
@@ -1546,8 +1556,8 @@ func (i *Inode) SplitExtentWithCheck(param *AppendExtParam) (delExtents []proto.
 
 // try to create version between curVer and seq of multiSnap.multiVersions[0] in verList
 func (i *Inode) CreateLowerVersion(curVer uint64, verlist *proto.VolVersionInfoList) (err error) {
-	verlist.RLock()
-	defer verlist.RUnlock()
+	verlist.RWLock.RLock()
+	defer verlist.RWLock.RUnlock()
 
 	log.LogDebugf("CreateLowerVersion inode %v curVer %v", i.Inode, curVer)
 	if len(verlist.VerList) <= 1 {
@@ -1601,7 +1611,7 @@ func (i *Inode) AppendExtentWithCheck(param *AppendExtParam) (delExtents []proto
 		param.mpId, param.mpVer, i.Inode, i.getVer(), param.ek, i.getLayerLen())
 
 	if param.mpVer != i.getVer() {
-		log.LogDebugf("action[AppendExtentWithCheck] mpId[%v].inode ver %v", param.mpId, i.getVer())
+		log.LogInfof("action[AppendExtentWithCheck] mpId[%v].inode ver %v", param.mpId, i.getVer())
 		i.CreateVer(param.mpVer)
 	}
 
@@ -1638,8 +1648,8 @@ func (i *Inode) AppendExtentWithCheck(param *AppendExtParam) (delExtents []proto
 	return
 }
 
-func (i *Inode) ExtentsTruncate(length uint64, ct int64, doOnLastKey func(*proto.ExtentKey)) (delExtents []proto.ExtentKey) {
-	delExtents = i.Extents.Truncate(length, doOnLastKey)
+func (i *Inode) ExtentsTruncate(length uint64, ct int64, doOnLastKey func(*proto.ExtentKey), insertRefMap func(ek *proto.ExtentKey)) (delExtents []proto.ExtentKey) {
+	delExtents = i.Extents.Truncate(length, doOnLastKey, insertRefMap)
 	i.Size = length
 	i.ModifyTime = ct
 	i.Generation++
@@ -1685,8 +1695,8 @@ func (i *Inode) DecSplitExts(mpId uint64, delExtents interface{}) {
 			log.LogDebugf("[DecSplitExts] mpId [%v]  ek not split %v", mpId, ek)
 			continue
 		}
-		if i.multiSnap.ekRefMap == nil {
-			log.LogErrorf("[DecSplitExts] mpid [%v]. multiSnap.ekRefMap is nil", mpId)
+		if i.multiSnap == nil || i.multiSnap.ekRefMap == nil {
+			log.LogErrorf("[DecSplitExts] mpid [%v]. inode [%v] multiSnap.ekRefMap is nil", mpId, i.Inode)
 			return
 		}
 

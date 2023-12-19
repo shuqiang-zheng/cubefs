@@ -107,7 +107,7 @@ const (
 	signV4Algorithm          = "AWS4-HMAC-SHA256"
 	streamingContentEncoding = "aws-chunked"
 
-	credentialFlag    = "Credential="
+	credentialFlag    = "Credential=" // #nosec G101
 	signatureFlag     = "Signature="
 	signedHeadersFlag = "SignedHeaders="
 
@@ -152,9 +152,9 @@ func NewAuth(r *http.Request) (Auther, error) {
 		return NewQueryAuth(r)
 	case r.Method == http.MethodPost && strings.Contains(r.Header.Get(ContentType), ValueMultipartFormData):
 		return NewFormAuth(r)
+	default:
+		return nil, MissingSecurityElement
 	}
-
-	return nil, MissingSecurityElement
 }
 
 type Credential struct {
@@ -218,8 +218,9 @@ func (o *ObjectNode) validateAuthInfo(r *http.Request, auth Auther) (err error) 
 		uid, ak, sk = sts.UserInfo.UserID, sts.UserInfo.AccessKey, sts.FedSK
 	}
 
-	mux.Vars(r)[ContextKeyUid] = uid
 	mux.Vars(r)[ContextKeyAccessKey] = ak
+	mux.Vars(r)[ContextKeyRequester] = uid
+
 	if !param.action.IsNone() && o.signatureIgnoredActions.Contains(param.action) {
 		return nil
 	}

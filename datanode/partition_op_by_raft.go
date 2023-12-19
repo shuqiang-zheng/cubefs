@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 
@@ -192,13 +193,15 @@ func (si *ItemIterator) ApplyIndex() uint64 {
 
 // Close Closes the iterator.
 func (si *ItemIterator) Close() {
+	// do nothing
 }
 
 // Next returns the next item in the iterator.
 func (si *ItemIterator) Next() (data []byte, err error) {
-	appIDBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(appIDBuf, si.applyID)
-	data = appIDBuf[:]
+	//appIDBuf := make([]byte, 8)
+	//binary.BigEndian.PutUint64(appIDBuf, si.applyID)
+	//data = appIDBuf[:]
+	err = io.EOF
 	return
 }
 
@@ -257,7 +260,9 @@ func (dp *DataPartition) ApplyRandomWrite(command []byte, raftApplyID uint64) (r
 			syncWrite = true
 		}
 
-		respStatus, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, writeType, syncWrite)
+		dp.disk.limitWrite.Run(int(opItem.size), func() {
+			respStatus, err = dp.ExtentStore().Write(opItem.extentID, opItem.offset, opItem.size, opItem.data, opItem.crc, writeType, syncWrite)
+		})
 		if err == nil {
 			break
 		}
@@ -316,18 +321,18 @@ func (dp *DataPartition) CheckRandomWriteVer(p *repl.Packet) (err error) {
 			}
 
 			p.VerSeq = dp.verSeq
-			dp.volVersionInfoList.RLock()
+			dp.volVersionInfoList.RWLock.RLock()
 			p.VerList = dp.volVersionInfoList.VerList
-			dp.volVersionInfoList.RUnlock()
+			dp.volVersionInfoList.RWLock.RUnlock()
 			log.LogDebugf("action[CheckRandomWriteVer] partitionId %v reqId %v verList %v seq %v", p.PartitionID, p.ReqID, p.VerList, p.VerSeq)
 			return
 		} else if p.VerSeq > dp.verSeq {
 			log.LogDebugf("action[CheckRandomWriteVer] partitionId %v reqId %v verList (%v) seq %v old one(%v)",
 				p.PartitionID, p.ReqID, p.VerList, p.VerSeq, dp.volVersionInfoList.VerList)
 			dp.verSeq = p.VerSeq
-			dp.volVersionInfoList.Lock()
+			dp.volVersionInfoList.RWLock.Lock()
 			dp.volVersionInfoList.VerList = p.VerList
-			dp.volVersionInfoList.Unlock()
+			dp.volVersionInfoList.RWLock.Unlock()
 		}
 	}
 	return

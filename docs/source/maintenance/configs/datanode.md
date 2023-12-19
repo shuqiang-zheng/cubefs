@@ -2,7 +2,7 @@
 ## Configuration Description
 
 | Keyword       | Parameter Type | Description                                                                                                                     | Required |
-|:---------------|:----------------|:---------------------------------------------------------------------------------------------------------------------------------|:----------|
+|:--------------|:---------------|:--------------------------------------------------------------------------------------------------------------------------------|:---------|
 | role          | string         | Role must be configured as "datanode"                                                                                           | Yes      |
 | listen        | string         | Port on which the data node starts TCP listening as a server                                                                    | Yes      |
 | localIP       | string         | IP address selected by the data node as a server                                                                                | No       |
@@ -17,6 +17,10 @@
 | masterAddr    | string slice   | Address of the cluster manager                                                                                                  | Yes      |
 | localIP       | string         | IP address of the local machine. If this option is not specified, the IP address used for communication with the master is used | No       |
 | zoneName      | string         | Specify the zone. By default, it is assigned to the `default` zone                                                              | No       |
+| diskReadIocc  | int            | Limit read concurrency io frequency per disk. No limit if less than or equal to 0                                               | No       |
+| diskReadFlow  | int            | Limit read io flow per disk. No limit if less than or equal to 0                                                                | No       |
+| diskWriteIocc | int            | Limit write concurrency io frequency per disk. No limit if less than or equal to 0                                              | No       |
+| diskWriteFlow | int            | Limit write io flow per disk. No limit if less than or equal to 0                                                               | No       |
 | disks         | string slice   | Format: `disk mount path:reserved space`, reserved space configuration range `[20G,50G]`                                        | Yes      |
 
 ## Configuration Example
@@ -38,6 +42,10 @@
          "10.196.59.199:17010",
          "10.196.59.200:17010"
      ],
+     "diskReadIocc": 0,
+     "diskReadFlow": 0,
+     "diskWriteIocc": 0,
+     "diskWriteFlow": 0,
      "disks": [
          "/data0:10737418240",
          "/data1:10737418240"

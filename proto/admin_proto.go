@@ -45,6 +45,7 @@ const (
 	AdminVolShrink                            = "/vol/shrink"
 	AdminVolExpand                            = "/vol/expand"
 	AdminVolForbidden                         = "/vol/forbidden"
+	AdminVolEnableAuditLog                    = "/vol/auditlog"
 	AdminCreateVol                            = "/admin/createVol"
 	AdminGetVol                               = "/admin/getVol"
 	AdminClusterFreeze                        = "/cluster/freeze"
@@ -74,15 +75,16 @@ const (
 	AdminOpFollowerPartitionsRead             = "/master/opFollowerPartitionRead"
 	AdminUpdateDecommissionLimit              = "/admin/updateDecommissionLimit"
 	AdminQueryDecommissionLimit               = "/admin/queryDecommissionLimit"
-	AdminQueryDecommissionToken               = "/admin/queryDecommissionToken"
-	AdminSetFileStats                         = "/admin/setFileStatsEnable"
-	AdminGetFileStats                         = "/admin/getFileStatsEnable"
-	AdminGetClusterValue                      = "/admin/getClusterValue"
-	AdminSetClusterUuidEnable                 = "/admin/setClusterUuidEnable"
-	AdminGetClusterUuid                       = "/admin/getClusterUuid"
-	AdminGenerateClusterUuid                  = "/admin/generateClusterUuid"
-	AdminSetDpDiscard                         = "/admin/setDpDiscard"
-	AdminGetDiscardDp                         = "/admin/getDiscardDp"
+	// #nosec G101
+	AdminQueryDecommissionToken = "/admin/queryDecommissionToken"
+	AdminSetFileStats           = "/admin/setFileStatsEnable"
+	AdminGetFileStats           = "/admin/getFileStatsEnable"
+	AdminGetClusterValue        = "/admin/getClusterValue"
+	AdminSetClusterUuidEnable   = "/admin/setClusterUuidEnable"
+	AdminGetClusterUuid         = "/admin/getClusterUuid"
+	AdminGenerateClusterUuid    = "/admin/generateClusterUuid"
+	AdminSetDpDiscard           = "/admin/setDpDiscard"
+	AdminGetDiscardDp           = "/admin/getDiscardDp"
 
 	AdminSetConLcNodeNum  = "/admin/setConLcNodeNum"
 	AdminGetAllLcNodeInfo = "/admin/getAllLcNodeInfo"
@@ -599,7 +601,9 @@ type HeartBeatRequest struct {
 	UidLimitToMetaNode
 	QuotaHeartBeatInfos
 	TxInfos
-	ForbiddenVols []string
+	ForbiddenVols     []string
+	DisableAuditVols  []string
+	DecommissionDisks []string // NOTE: for datanode
 }
 
 // DataPartitionReport defines the partition report.
@@ -686,6 +690,7 @@ type MetaNodeHeartbeatResponse struct {
 type LcNodeHeartbeatResponse struct {
 	Status                uint8
 	Result                string
+	LcTaskCountLimit      int
 	LcScanningTasks       map[string]*LcNodeRuleTaskResponse
 	SnapshotScanningTasks map[string]*SnapshotVerDelTaskResponse
 }
@@ -834,7 +839,6 @@ type VolView struct {
 	DeleteLockTime int64
 	CacheTTL       int
 	VolType        int
-	Forbidden      bool
 }
 
 func (v *VolView) SetOwner(owner string) {
@@ -901,8 +905,9 @@ func QosTypeString(factorType uint32) string {
 		return "FlowRead"
 	case FlowWriteType:
 		return "FlowWrite"
+	default:
+		return "unkown"
 	}
-	return "unkown"
 }
 
 type ClientLimitInfo struct {
@@ -1000,8 +1005,9 @@ type SimpleVolView struct {
 	PreloadCapacity  uint64
 	Uids             []UidSimpleInfo
 	// multi version snapshot
-	LatestVer uint64
-	Forbidden bool
+	LatestVer      uint64
+	Forbidden      bool
+	EnableAuditLog bool
 }
 
 type NodeSetInfo struct {

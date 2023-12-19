@@ -248,6 +248,48 @@ func (m *Server) forbidVolume(w http.ResponseWriter, r *http.Request) {
 	sendOkReply(w, r, newSuccessHTTPReply(fmt.Sprintf("set volume forbidden to (%v) success", status)))
 }
 
+func (m *Server) setEnableAuditLogForVolume(w http.ResponseWriter, r *http.Request) {
+	var (
+		status bool
+		name   string
+		err    error
+	)
+	metric := exporter.NewTPCnt(apiToMetricsName(proto.AdminVolEnableAuditLog))
+	defer func() {
+		doStatAndMetric(proto.AdminVolEnableAuditLog, metric, err, nil)
+		if err != nil {
+			log.LogErrorf("set volume aduit log failed, error: %v", err)
+		} else {
+			log.LogInfof("set volume aduit log to (%v) success", status)
+		}
+	}()
+	if name, err = parseAndExtractName(r); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+	if status, err = parseAndExtractStatus(r); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+	vol, err := m.cluster.getVol(name)
+	if err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeVolNotExists, Msg: err.Error()})
+		return
+	}
+	oldEnable := vol.EnableAuditLog
+	vol.EnableAuditLog = status
+	defer func() {
+		if err != nil {
+			vol.EnableAuditLog = oldEnable
+		}
+	}()
+	if err = m.cluster.syncUpdateVol(vol); err != nil {
+		sendErrReply(w, r, newErrHTTPReply(err))
+		return
+	}
+	sendOkReply(w, r, newSuccessHTTPReply(fmt.Sprintf("set volume audit log to (%v) success", status)))
+}
+
 func (m *Server) setupForbidMetaPartitionDecommission(w http.ResponseWriter, r *http.Request) {
 	var (
 		status bool
@@ -605,6 +647,8 @@ func (m *Server) UidOperate(w http.ResponseWriter, r *http.Request) {
 		ok = vol.uidSpaceManager.removeUid(uid)
 	case util.AclListIP:
 		uidList = vol.uidSpaceManager.listAll()
+	default:
+		// do nothing
 	}
 
 	rsp := &proto.UidSpaceRsp{
@@ -680,6 +724,8 @@ func (m *Server) aclOperate(w http.ResponseWriter, r *http.Request) {
 			sendErrReply(w, r, newErrHTTPReply(fmt.Errorf("inner error")))
 			return
 		}
+	default:
+		// do nothing
 	}
 
 	rsp := &proto.AclRsp{
@@ -2178,8 +2224,8 @@ func (m *Server) checkCreateReq(req *createVolReq) (err error) {
 		return fmt.Errorf("vol capacity can't be zero, %d", req.capacity)
 	}
 
-	if req.size != 0 && req.size <= 10 {
-		return fmt.Errorf("datapartition size must be bigger than 10 G")
+	if req.dpSize != 0 && req.dpSize <= 10 {
+		return fmt.Errorf("datapartition dpSize must be bigger than 10 G")
 	}
 
 	if proto.IsHot(req.volType) {
@@ -2439,6 +2485,7 @@ func newSimpleView(vol *Vol) (view *proto.SimpleVolView) {
 		PreloadCapacity:         vol.getPreloadCapacity(),
 		LatestVer:               vol.VersionMgr.getLatestVer(),
 		Forbidden:               vol.Forbidden,
+		EnableAuditLog:          vol.EnableAuditLog,
 	}
 
 	vol.uidSpaceManager.RLock()
@@ -6177,6 +6224,8 @@ func (m *Server) S3QosGet(w http.ResponseWriter, r *http.Request) {
 			apiLimitConf[api].QPSQuota[uid] = v
 		case proto.ConcurrentLimit:
 			apiLimitConf[api].ConcurrentQuota[uid] = v
+		default:
+			// do nothing
 		}
 		return true
 	})

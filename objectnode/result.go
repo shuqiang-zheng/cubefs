@@ -15,6 +15,8 @@
 package objectnode
 
 import (
+	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"net/url"
 	"regexp"
@@ -39,6 +41,16 @@ func UnmarshalXMLEntity(bytes []byte, data interface{}) error {
 		return err
 	}
 	return nil
+}
+
+func ParseJSONEntity(raw interface{}, entity interface{}) error {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(entity)
 }
 
 type LocationResponse struct {
@@ -348,4 +360,42 @@ type CompleteMultipartUploadRequest struct {
 type CreateBucketRequest struct {
 	XMLName            xml.Name `xml:"CreateBucketConfiguration"`
 	LocationConstraint string   `xml:"LocationConstraint"`
+}
+
+type S3UploadObject struct {
+	XMLName  xml.Name
+	Bucket   string `xml:"Bucket"` // bucket name
+	Key      string `xml:"Key"`    // object id or name
+	ETag     string `xml:"ETag"`   // object content MD5 hash
+	Location string `xml:"Location"`
+}
+
+func NewS3UploadObject() *S3UploadObject {
+	return &S3UploadObject{
+		XMLName: xml.Name{
+			Space: S3Namespace,
+			Local: "PostResponse",
+		},
+	}
+}
+
+func (s3 *S3UploadObject) SetBucket(bucket string) {
+	s3.Bucket = bucket
+}
+
+func (s3 *S3UploadObject) SetKey(key string) {
+	s3.Key = key
+}
+
+func (s3 *S3UploadObject) SetETag(etag string) {
+	s3.ETag = etag
+}
+
+func (s3 *S3UploadObject) SetLocation(location string) {
+	s3.Location = location
+}
+
+func (s3 *S3UploadObject) String() string {
+	b, _ := xml.Marshal(s3)
+	return string(b)
 }

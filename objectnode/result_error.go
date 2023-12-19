@@ -34,6 +34,7 @@ var (
 	EntityTooLarge                      = &ErrorCode{ErrorCode: "EntityTooLarge", ErrorMessage: "Your proposed upload exceeds the maximum allowed object size.", StatusCode: http.StatusBadRequest}
 	IncorrectNumberOfFilesInPostRequest = &ErrorCode{ErrorCode: "IncorrectNumberOfFilesInPostRequest", ErrorMessage: "POST requires exactly one file upload per request.", StatusCode: http.StatusBadRequest}
 	InvalidArgument                     = &ErrorCode{ErrorCode: "InvalidArgument", ErrorMessage: "Invalid Argument", StatusCode: http.StatusBadRequest}
+	DisableCreateBucketByS3             = &ErrorCode{ErrorCode: "DisableCreateBucketByS3", ErrorMessage: "DisableCreateBucketByS3.", StatusCode: http.StatusBadRequest}
 	InvalidBucketName                   = &ErrorCode{ErrorCode: "InvalidBucketName", ErrorMessage: "The specified bucket is not valid.", StatusCode: http.StatusBadRequest}
 	InvalidRange                        = &ErrorCode{ErrorCode: "InvalidRange", ErrorMessage: "The requested range cannot be satisfied.", StatusCode: http.StatusRequestedRangeNotSatisfiable}
 	MissingContentLength                = &ErrorCode{ErrorCode: "MissingContentLength", ErrorMessage: "You must provide the Content-Length HTTP header.", StatusCode: http.StatusLengthRequired}
@@ -51,6 +52,7 @@ var (
 	OverMaxRecordSize                   = &ErrorCode{ErrorCode: "OverMaxRecordSize", ErrorMessage: "The length of a record in the input or result is greater than maxCharsPerRecord of 1 MB.", StatusCode: http.StatusBadRequest}
 	CopySourceSizeTooLarge              = &ErrorCode{ErrorCode: "InvalidRequest", ErrorMessage: "The specified copy source is larger than the maximum allowable size for a copy source: 5368709120", StatusCode: http.StatusBadRequest}
 	InvalidPartOrder                    = &ErrorCode{ErrorCode: "InvalidPartOrder", ErrorMessage: "The list of parts was not in ascending order. Parts list must be specified in order by part number.", StatusCode: http.StatusBadRequest}
+	InvalidPartNumber                   = &ErrorCode{ErrorCode: "InvalidPartNumber", ErrorMessage: "The specified partNumber must be greater than 0.", StatusCode: http.StatusBadRequest}
 	InvalidPart                         = &ErrorCode{ErrorCode: "InvalidPart", ErrorMessage: "One or more of the specified parts could not be found. The part might not have been uploaded, or the specified entity tag might not have matched the part's entity tag.", StatusCode: http.StatusBadRequest}
 	InvalidCacheArgument                = &ErrorCode{ErrorCode: "InvalidCacheArgument", ErrorMessage: "Invalid Cache-Control or Expires Argument", StatusCode: http.StatusBadRequest}
 	ExceedTagLimit                      = &ErrorCode{ErrorCode: "InvalidTagError", ErrorMessage: "Object tags cannot be greater than 10", StatusCode: http.StatusBadRequest}
@@ -83,11 +85,11 @@ var (
 	LifeCycleRulesLessThenOne           = &ErrorCode{ErrorCode: "InvalidRequest", ErrorMessage: "At least one lifecycle rule must be specified.", StatusCode: http.StatusBadRequest}
 	LifeCycleAtLeastOneAction           = &ErrorCode{ErrorCode: "InvalidRequest", ErrorMessage: "At least one action must be specified in a lifecycle rule.", StatusCode: http.StatusBadRequest}
 	LifeCycleRulesInvalid               = &ErrorCode{ErrorCode: "InvalidRequest", ErrorMessage: "Lifecycle rule is invalid.", StatusCode: http.StatusBadRequest}
-
-	NoSuchObjectLockConfiguration   = &ErrorCode{"NoSuchObjectLockConfiguration", "The specified object does not have a ObjectLock configuration", http.StatusNotFound}
-	NoContentMd5HeaderErr           = &ErrorCode{"NoContentMd5Header", "Content-MD5 HTTP header is required for Upload Object/Part requests with Object Lock parameters", http.StatusBadRequest}
-	ObjectLockConfigurationNotFound = &ErrorCode{"ObjectLockConfigurationNotFoundError", "Object Lock configuration does not exist for this bucket", http.StatusNotFound}
-	TooManyRequests                 = &ErrorCode{"TooManyRequests", "too many requests, please retry later", http.StatusTooManyRequests}
+	NoSuchObjectLockConfiguration       = &ErrorCode{"NoSuchObjectLockConfiguration", "The specified object does not have a ObjectLock configuration", http.StatusNotFound}
+	NoContentMd5HeaderErr               = &ErrorCode{"NoContentMd5Header", "Content-MD5 HTTP header is required for Upload Object/Part requests with Object Lock parameters", http.StatusBadRequest}
+	ObjectLockConfigurationNotFound     = &ErrorCode{"ObjectLockConfigurationNotFoundError", "Object Lock configuration does not exist for this bucket", http.StatusNotFound}
+	TooManyRequests                     = &ErrorCode{"TooManyRequests", "too many requests, please retry later", http.StatusTooManyRequests}
+	MalformedPOSTRequest                = &ErrorCode{ErrorCode: "MalformedPOSTRequest", ErrorMessage: "The body of your POST request is not well-formed multipart/form-data.", StatusCode: http.StatusBadRequest}
 )
 
 type ErrorCode struct {
@@ -124,7 +126,8 @@ func (ec *ErrorCode) ServeResponse(w http.ResponseWriter, r *http.Request) {
 		Resource:  r.URL.String(),
 		RequestId: GetRequestID(r),
 	}
-	response, _ := MarshalXMLEntity(errorResponse)
+	response, _ := xml.Marshal(errorResponse)
+	response = append([]byte(strings.TrimSuffix(xml.Header, "\n")), response...)
 	w.Header().Set(ContentType, ValueContentTypeXML)
 	w.Header().Set(ContentLength, strconv.Itoa(len(response)))
 	w.WriteHeader(ec.StatusCode)
@@ -133,6 +136,14 @@ func (ec *ErrorCode) ServeResponse(w http.ResponseWriter, r *http.Request) {
 
 func (ec *ErrorCode) Error() string {
 	return ec.ErrorMessage
+}
+
+func (ec *ErrorCode) Copy() *ErrorCode {
+	return &ErrorCode{
+		ErrorCode:    ec.ErrorCode,
+		ErrorMessage: ec.ErrorMessage,
+		StatusCode:   ec.StatusCode,
+	}
 }
 
 func ServeInternalStaticErrorResponse(w http.ResponseWriter, r *http.Request) {

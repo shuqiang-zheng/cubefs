@@ -19,7 +19,6 @@ import (
 	"fmt"
 	syslog "log"
 	"net"
-	_ "net/http/pprof"
 	"os"
 	"path"
 	"strconv"
@@ -331,8 +330,10 @@ func (m *metadataManager) startCpuSample() {
 			case <-m.stopC:
 				return
 			default:
-				used := loadutil.GetCpuUtilPercent(sampleDuration)
-				m.cpuUtil.Store(used)
+				used, err := loadutil.GetCpuUtilPercent(sampleDuration)
+				if err == nil {
+					m.cpuUtil.Store(used)
+				}
 			}
 		}
 	}()
@@ -395,12 +396,15 @@ func (m *metadataManager) loadPartitions() (err error) {
 	for i := 0; i < 3; i++ {
 		if metaNodeInfo, err = masterClient.NodeAPI().GetMetaNode(fmt.Sprintf("%s:%s", m.metaNode.localAddr,
 			m.metaNode.listen)); err != nil {
-			log.LogErrorf("loadPartitions: get MetaNode info fail: err(%v)", err)
+			log.LogWarnf("loadPartitions: get MetaNode info fail: err(%v)", err)
 			continue
 		}
 		break
 	}
-
+	if err != nil {
+		log.LogErrorf("loadPartitions: get MetaNode info fail: err(%v)", err)
+		return
+	}
 	if len(metaNodeInfo.PersistenceMetaPartitions) == 0 {
 		log.LogWarnf("loadPartitions: length of PersistenceMetaPartitions is 0, ExpiredPartition check without effect")
 	}

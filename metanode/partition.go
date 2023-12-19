@@ -278,6 +278,8 @@ type MetaPartition interface {
 	ForceSetMetaPartitionToFininshLoad()
 	IsForbidden() bool
 	SetForbidden(status bool)
+	IsEnableAuditLog() bool
+	SetEnableAuditLog(status bool)
 }
 
 type UidManager struct {
@@ -516,6 +518,7 @@ type metaPartition struct {
 	multiVersionList       *proto.VolVersionInfoList
 	versionLock            sync.Mutex
 	verUpdateChan          chan []byte
+	enableAuditLog         bool
 }
 
 func (mp *metaPartition) IsForbidden() bool {
@@ -524,6 +527,14 @@ func (mp *metaPartition) IsForbidden() bool {
 
 func (mp *metaPartition) SetForbidden(status bool) {
 	mp.config.Forbidden = status
+}
+
+func (mp *metaPartition) IsEnableAuditLog() bool {
+	return mp.enableAuditLog
+}
+
+func (mp *metaPartition) SetEnableAuditLog(status bool) {
+	mp.enableAuditLog = status
 }
 
 func (mp *metaPartition) acucumRebuildStart() bool {
@@ -541,16 +552,23 @@ func (mp *metaPartition) acucumUidSizeByLoad(ino *Inode) {
 }
 
 func (mp *metaPartition) GetVerList() []*proto.VolVersionInfo {
-	mp.multiVersionList.RLock()
-	defer mp.multiVersionList.RUnlock()
-	return mp.multiVersionList.VerList
+	mp.multiVersionList.RWLock.RLock()
+	defer mp.multiVersionList.RWLock.RUnlock()
+
+	verList := make([]*proto.VolVersionInfo, len(mp.multiVersionList.VerList))
+	copy(verList, mp.multiVersionList.VerList)
+
+	return verList
 }
 
 // include TemporaryVerMap or else cann't recycle temporary version after restart
 func (mp *metaPartition) GetAllVerList() (verList []*proto.VolVersionInfo) {
-	mp.multiVersionList.RLock()
-	defer mp.multiVersionList.RUnlock()
-	verList = mp.multiVersionList.VerList
+	mp.multiVersionList.RWLock.RLock()
+	defer mp.multiVersionList.RWLock.RUnlock()
+
+	verList = make([]*proto.VolVersionInfo, len(mp.multiVersionList.VerList))
+	copy(verList, mp.multiVersionList.VerList)
+
 	for _, verInfo := range mp.multiVersionList.TemporaryVerMap {
 		verList = append(verList, verInfo)
 	}
@@ -560,38 +578,6 @@ func (mp *metaPartition) GetAllVerList() (verList []*proto.VolVersionInfo) {
 		}
 		return false
 	})
-	return
-}
-
-func (mp *metaPartition) checkAndUpdateVerList(verSeq uint64) (err error) {
-	mp.multiVersionList.Lock()
-	defer mp.multiVersionList.Unlock()
-
-	if isInitSnapVer(verSeq) {
-		verSeq = 0
-	}
-	log.LogDebugf("mp.multiVersionList.VerList size %v, content %v", len(mp.multiVersionList.VerList), mp.multiVersionList.VerList)
-	nLen := len(mp.multiVersionList.VerList)
-	if nLen == 0 {
-		log.LogFatalf("checkAndUpdateVerList. mp %v must have more than one version on list", mp.config.PartitionId)
-		return
-	}
-
-	if mp.multiVersionList.VerList[0].Ver > verSeq {
-		return
-	}
-	if mp.multiVersionList.VerList[0].Ver == verSeq {
-		log.LogWarnf("checkAndUpdateVerList. mp %v last ver %v need drop!", mp.config.PartitionId, verSeq)
-		if len(mp.multiVersionList.VerList) == 0 {
-			mp.multiVersionList.VerList = mp.multiVersionList.VerList[:0]
-			return
-		}
-		mp.multiVersionList.VerList = mp.multiVersionList.VerList[1:]
-		return
-	} else {
-		log.LogWarnf("checkAndUpdateVerList. mp %v last ver %v need drop on sequence,request %v!",
-			mp.config.PartitionId, mp.multiVersionList.VerList[0].Ver, verSeq)
-	}
 	return
 }
 
@@ -697,7 +683,7 @@ func (mp *metaPartition) versionInit(isCreate bool) (err error) {
 		mp.multiVersionList.VerList = append(mp.multiVersionList.VerList, info)
 	}
 
-	log.LogDebugf("action[onStart] verList %v", mp.multiVersionList.VerList)
+	log.LogDebugf("action[onStart] mp %v verList %v", mp.config.PartitionId, mp.multiVersionList.VerList)
 	vlen := len(mp.multiVersionList.VerList)
 	if vlen > 0 {
 		mp.verSeq = mp.multiVersionList.VerList[vlen-1].Ver
@@ -786,6 +772,7 @@ func (mp *metaPartition) onStart(isCreate bool) (err error) {
 
 	if proto.IsHot(mp.volType) {
 		log.LogInfof("hot vol not need cacheTTL")
+		go mp.multiVersionTTLWork(time.Minute)
 		return
 	}
 	// do cache TTL die out process
@@ -795,7 +782,6 @@ func (mp *metaPartition) onStart(isCreate bool) (err error) {
 		return
 	}
 
-	go mp.multiVersionTTLWork(time.Hour)
 	return
 }
 
@@ -900,6 +886,7 @@ func NewMetaPartition(conf *MetaPartitionConfig, manager *metadataManager) MetaP
 		multiVersionList: &proto.VolVersionInfoList{
 			TemporaryVerMap: make(map[uint64]*proto.VolVersionInfo),
 		},
+		enableAuditLog: true,
 	}
 	mp.txProcessor = NewTransactionProcessor(mp)
 	return mp
@@ -1396,32 +1383,29 @@ func (mp *metaPartition) canRemoveSelf() (canRemove bool, err error) {
 
 // cacheTTLWork only happen in datalake situation
 func (mp *metaPartition) multiVersionTTLWork(dur time.Duration) {
-	// check volume type, only Cold volume will do the cache ttl.
-	if mp.verSeq == 0 {
-		return
-	}
 	// do cache ttl work
 	// first sleep a rand time, range [0, 1200s(20m)],
 	// make sure all mps is not doing scan work at the same time.
 	rand.Seed(time.Now().Unix())
-	time.Sleep(time.Duration(rand.Intn(1200)))
-
+	time.Sleep(time.Duration(rand.Intn(60)))
+	log.LogDebugf("[multiVersionTTLWork] start, mp[%v]", mp.config.PartitionId)
 	ttl := time.NewTicker(dur)
 	snapQueue := make(chan interface{}, 5)
 	for {
 		select {
 		case <-ttl.C:
 			log.LogDebugf("[multiVersionTTLWork] begin cache ttl, mp[%v]", mp.config.PartitionId)
-			// only leader can do TTL work
-			if _, ok := mp.IsLeader(); !ok {
-				log.LogDebugf("[multiVersionTTLWork] partitionId=%d is not leader, skip", mp.config.PartitionId)
+			mp.multiVersionList.RWLock.RLock()
+			var volVersionInfoList = &proto.VolVersionInfoList{
+				TemporaryVerMap: make(map[uint64]*proto.VolVersionInfo),
 			}
-			mp.multiVersionList.RLock()
-			volVersionInfoList := &proto.VolVersionInfoList{
-				VerList:         mp.multiVersionList.VerList,
-				TemporaryVerMap: mp.multiVersionList.TemporaryVerMap,
+			copy(volVersionInfoList.VerList, mp.multiVersionList.VerList)
+			for key, value := range mp.multiVersionList.TemporaryVerMap {
+				copiedValue := *value
+				volVersionInfoList.TemporaryVerMap[key] = &copiedValue
 			}
-			mp.multiVersionList.RUnlock()
+
+			mp.multiVersionList.RWLock.RUnlock()
 			for _, version := range volVersionInfoList.TemporaryVerMap {
 				if version.Status == proto.VersionDeleting {
 					continue
@@ -1430,7 +1414,9 @@ func (mp *metaPartition) multiVersionTTLWork(dur time.Duration) {
 				version.Status = proto.VersionDeleting
 				go func(verSeq uint64) {
 					mp.delPartitionVersion(verSeq)
-					delete(volVersionInfoList.TemporaryVerMap, verSeq)
+					mp.multiVersionList.RWLock.Lock()
+					delete(mp.multiVersionList.TemporaryVerMap, verSeq)
+					mp.multiVersionList.RWLock.Unlock()
 					<-snapQueue
 				}(version.Ver)
 			}
@@ -1563,6 +1549,8 @@ func (mp *metaPartition) delPartitionInodesVersion(verSeq uint64, wg *sync.WaitG
 			Inode:  inode.Inode,
 			VerSeq: verSeq,
 		}
+		inode.RUnlock()
+
 		mp.UnlinkInode(req, p, localAddrForAudit)
 		// check empty result.
 		// if result is OpAgain, means the extDelCh maybe full,
@@ -1571,7 +1559,6 @@ func (mp *metaPartition) delPartitionInodesVersion(verSeq uint64, wg *sync.WaitG
 			needSleep = true
 		}
 
-		inode.RUnlock()
 		// every 1000 inode sleep 1s
 		if count > 1000 || needSleep {
 			count %= 1000

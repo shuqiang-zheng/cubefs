@@ -50,6 +50,10 @@ const (
 	ExpiredPartitionExistTime = time.Hour * time.Duration(24*7)
 )
 
+const (
+	DecommissionDiskMark = "decommissionDiskMark"
+)
+
 // Disk represents the structure of the disk
 type Disk struct {
 	sync.RWMutex
@@ -75,10 +79,13 @@ type Disk struct {
 	dataNode                                  *DataNode
 
 	limitFactor map[uint32]*rate.Limiter
+	limitRead   *ioLimiter
+	limitWrite  *ioLimiter
 
 	// diskPartition info
 	diskPartition       *disk.PartitionStat
 	DiskErrPartitionSet map[uint64]struct{}
+	decommission        bool
 }
 
 const (
@@ -120,9 +127,58 @@ func NewDisk(path string, reservedSpace, diskRdonlySpace uint64, maxErrCnt int, 
 	d.limitFactor[proto.FlowWriteType] = rate.NewLimiter(rate.Limit(proto.QosDefaultDiskMaxFLowLimit), proto.QosDefaultBurst)
 	d.limitFactor[proto.IopsReadType] = rate.NewLimiter(rate.Limit(proto.QosDefaultDiskMaxIoLimit), defaultIOLimitBurst)
 	d.limitFactor[proto.IopsWriteType] = rate.NewLimiter(rate.Limit(proto.QosDefaultDiskMaxIoLimit), defaultIOLimitBurst)
+	d.limitRead = newIOLimiter(space.dataNode.diskReadFlow, space.dataNode.diskReadIocc)
+	d.limitWrite = newIOLimiter(space.dataNode.diskWriteFlow, space.dataNode.diskWriteIocc)
 
 	d.DiskErrPartitionSet = make(map[uint64]struct{}, 0)
+
+	err = d.initDecommissionStatus()
+	if err != nil {
+		log.LogErrorf("action[NewDisk]: failed to load disk decommission status")
+		// NOTE: continue execution
+		err = nil
+	}
 	return
+}
+
+func (d *Disk) MarkDecommissionStatus(decommission bool) {
+	probePath := path.Join(d.Path, DecommissionDiskMark)
+	var err error
+	defer func() {
+		if err != nil {
+			log.LogErrorf("action[MarkDecommissionStatus]: %v", err)
+			return
+		}
+	}()
+	if decommission {
+		file, err := os.Create(probePath)
+		if err == nil {
+			file.Close()
+		}
+	} else {
+		err = os.Remove(probePath)
+		if os.IsNotExist(err) {
+			err = nil
+		}
+	}
+	d.decommission = decommission
+}
+
+func (d *Disk) GetDecommissionStatus() bool {
+	return d.decommission
+}
+
+func (d *Disk) initDecommissionStatus() error {
+	probePath := path.Join(d.Path, DecommissionDiskMark)
+	_, err := os.Stat(probePath)
+	if err == nil {
+		d.decommission = true
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (d *Disk) GetDiskPartition() *disk.PartitionStat {
@@ -130,24 +186,28 @@ func (d *Disk) GetDiskPartition() *disk.PartitionStat {
 }
 
 func (d *Disk) updateQosLimiter() {
-	if d.dataNode.diskFlowReadLimit > 0 {
-		d.limitFactor[proto.FlowReadType].SetLimit(rate.Limit(d.dataNode.diskFlowReadLimit))
+	if d.dataNode.diskReadFlow > 0 {
+		d.limitFactor[proto.FlowReadType].SetLimit(rate.Limit(d.dataNode.diskReadFlow))
 	}
-	if d.dataNode.diskFlowWriteLimit > 0 {
-		d.limitFactor[proto.FlowWriteType].SetLimit(rate.Limit(d.dataNode.diskFlowWriteLimit))
+	if d.dataNode.diskWriteFlow > 0 {
+		d.limitFactor[proto.FlowWriteType].SetLimit(rate.Limit(d.dataNode.diskWriteFlow))
 	}
-	if d.dataNode.diskIopsReadLimit > 0 {
-		d.limitFactor[proto.IopsReadType].SetLimit(rate.Limit(d.dataNode.diskIopsReadLimit))
+	if d.dataNode.diskReadIops > 0 {
+		d.limitFactor[proto.IopsReadType].SetLimit(rate.Limit(d.dataNode.diskReadIops))
 	}
-	if d.dataNode.diskIopsWriteLimit > 0 {
-		d.limitFactor[proto.IopsWriteType].SetLimit(rate.Limit(d.dataNode.diskIopsWriteLimit))
+	if d.dataNode.diskWriteIops > 0 {
+		d.limitFactor[proto.IopsWriteType].SetLimit(rate.Limit(d.dataNode.diskWriteIops))
 	}
-
 	for i := proto.IopsReadType; i < proto.FlowWriteType; i++ {
 		log.LogInfof("action[updateQosLimiter] type %v limit %v", proto.QosTypeString(i), d.limitFactor[i].Limit())
 	}
-	log.LogInfof("action[updateQosLimiter] flowRead %v flowWrite %v iopsRead %v iopsWrite %v",
-		d.dataNode.diskFlowReadLimit, d.dataNode.diskFlowWriteLimit, d.dataNode.diskIopsReadLimit, d.dataNode.diskIopsWriteLimit)
+	log.LogInfof("action[updateQosLimiter] read(iocc:%d iops:%d flow:%d) write(iocc:%d iops:%d flow:%d)",
+		d.dataNode.diskReadIocc, d.dataNode.diskReadIops, d.dataNode.diskReadFlow,
+		d.dataNode.diskWriteIocc, d.dataNode.diskWriteIops, d.dataNode.diskWriteFlow)
+	d.limitRead.ResetIO(d.dataNode.diskReadIocc)
+	d.limitRead.ResetFlow(d.dataNode.diskReadFlow)
+	d.limitWrite.ResetIO(d.dataNode.diskWriteIocc)
+	d.limitWrite.ResetFlow(d.dataNode.diskWriteFlow)
 }
 
 func (d *Disk) allocCheckLimit(factorType uint32, used uint32) error {
@@ -260,8 +320,20 @@ func (d *Disk) incReadErrCnt() {
 	atomic.AddUint64(&d.ReadErrCnt, 1)
 }
 
+func (d *Disk) getReadErrCnt() uint64 {
+	return atomic.LoadUint64(&d.ReadErrCnt)
+}
+
 func (d *Disk) incWriteErrCnt() {
 	atomic.AddUint64(&d.WriteErrCnt, 1)
+}
+
+func (d *Disk) getWriteErrCnt() uint64 {
+	return atomic.LoadUint64(&d.WriteErrCnt)
+}
+
+func (d *Disk) getTotalErrCnt() uint64 {
+	return d.getReadErrCnt() + d.getWriteErrCnt()
 }
 
 func (d *Disk) startScheduleToUpdateSpaceInfo() {
@@ -304,6 +376,11 @@ const (
 )
 
 func (d *Disk) checkDiskStatus() {
+	if d.Status == proto.Unavailable {
+		log.LogInfof("[checkDiskStatus] disk status is unavailable, no need to check, disk path(%v)", d.Path)
+		return
+	}
+
 	path := path.Join(d.Path, DiskStatusFile)
 	fp, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o755)
 	if err != nil {
@@ -327,6 +404,8 @@ func (d *Disk) checkDiskStatus() {
 	}
 }
 
+const DiskErrNotAssociatedWithPartition uint64 = 0 // use 0 for disk error without any data partition
+
 func (d *Disk) CheckDiskError(err error, rwFlag uint8) {
 	if err == nil {
 		return
@@ -337,11 +416,16 @@ func (d *Disk) CheckDiskError(err error, rwFlag uint8) {
 		return
 	}
 
-	d.triggerDiskError(rwFlag, nil)
+	d.triggerDiskError(rwFlag, DiskErrNotAssociatedWithPartition)
 }
 
-func (d *Disk) triggerDiskError(rwFlag uint8, dpId *uint64) {
-	mesg := fmt.Sprintf("disk path %v error on %v", d.Path, LocalIP)
+func (d *Disk) doDiskError() {
+	d.Status = proto.Unavailable
+	d.ForceExitRaftStore()
+}
+
+func (d *Disk) triggerDiskError(rwFlag uint8, dpId uint64) {
+	mesg := fmt.Sprintf("disk path %v error on %v, dpId %v", d.Path, LocalIP, dpId)
 	exporter.Warning(mesg)
 	log.LogWarnf(mesg)
 
@@ -354,15 +438,18 @@ func (d *Disk) triggerDiskError(rwFlag uint8, dpId *uint64) {
 		d.incReadErrCnt()
 	}
 
-	if dpId != nil {
-		d.AddDiskErrPartition(*dpId)
-	} else {
-		//use 0 for disk error without any data partition
-		d.AddDiskErrPartition(0)
-	}
+	d.AddDiskErrPartition(dpId)
 
-	d.Status = proto.Unavailable
-	d.ForceExitRaftStore()
+	diskErrCnt := d.getTotalErrCnt()
+	diskErrPartitionCnt := d.GetDiskErrPartitionCount()
+	if diskErrCnt >= d.dataNode.diskUnavailableErrorCount || diskErrPartitionCnt >= d.dataNode.diskUnavailablePartitionErrorCount {
+		msg := fmt.Sprintf("set disk unavailable for too many disk error, "+
+			"disk path(%v), ip(%v), diskErrCnt(%v) threshold(%v), diskErrPartitionCnt(%v) threshold(%v)",
+			d.Path, LocalIP, diskErrCnt, d.dataNode.diskUnavailableErrorCount, diskErrPartitionCnt, d.dataNode.diskUnavailablePartitionErrorCount)
+		exporter.Warning(msg)
+		log.LogWarnf(msg)
+		d.doDiskError()
+	}
 }
 
 func (d *Disk) updateSpaceInfo() (err error) {
@@ -412,6 +499,12 @@ func (d *Disk) GetDataPartition(partitionID uint64) (partition *DataPartition) {
 	d.RLock()
 	defer d.RUnlock()
 	return d.partitionMap[partitionID]
+}
+
+func (d *Disk) GetDataPartitionCount() int {
+	d.RLock()
+	defer d.RUnlock()
+	return len(d.partitionMap)
 }
 
 func (d *Disk) ForceExitRaftStore() {
@@ -633,6 +726,10 @@ func (d *Disk) GetDiskErrPartitionList() (diskErrPartitionList []uint64) {
 		diskErrPartitionList = append(diskErrPartitionList, k)
 	}
 	return diskErrPartitionList
+}
+
+func (d *Disk) GetDiskErrPartitionCount() uint64 {
+	return uint64(len(d.DiskErrPartitionSet))
 }
 
 // isExpiredPartition return whether one partition is expired

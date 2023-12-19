@@ -27,6 +27,7 @@ import (
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/storage"
 	"github.com/cubefs/cubefs/util/config"
+	"github.com/cubefs/cubefs/util/log"
 )
 
 var AutoRepairStatus = true
@@ -35,27 +36,29 @@ func (s *DataNode) getDiskAPI(w http.ResponseWriter, r *http.Request) {
 	disks := make([]interface{}, 0)
 	for _, diskItem := range s.space.GetDisks() {
 		disk := &struct {
-			Path        string `json:"path"`
-			Total       uint64 `json:"total"`
-			Used        uint64 `json:"used"`
-			Available   uint64 `json:"available"`
-			Unallocated uint64 `json:"unallocated"`
-			Allocated   uint64 `json:"allocated"`
-			Status      int    `json:"status"`
-			RestSize    uint64 `json:"restSize"`
-			DiskRdoSize uint64 `json:"diskRdoSize"`
-			Partitions  int    `json:"partitions"`
+			Path         string `json:"path"`
+			Total        uint64 `json:"total"`
+			Used         uint64 `json:"used"`
+			Available    uint64 `json:"available"`
+			Unallocated  uint64 `json:"unallocated"`
+			Allocated    uint64 `json:"allocated"`
+			Status       int    `json:"status"`
+			RestSize     uint64 `json:"restSize"`
+			DiskRdoSize  uint64 `json:"diskRdoSize"`
+			Partitions   int    `json:"partitions"`
+			Decommission bool   `json:"decommission"`
 		}{
-			Path:        diskItem.Path,
-			Total:       diskItem.Total,
-			Used:        diskItem.Used,
-			Available:   diskItem.Available,
-			Unallocated: diskItem.Unallocated,
-			Allocated:   diskItem.Allocated,
-			Status:      diskItem.Status,
-			RestSize:    diskItem.ReservedSpace,
-			DiskRdoSize: diskItem.DiskRdonlySpace,
-			Partitions:  diskItem.PartitionCount(),
+			Path:         diskItem.Path,
+			Total:        diskItem.Total,
+			Used:         diskItem.Used,
+			Available:    diskItem.Available,
+			Unallocated:  diskItem.Unallocated,
+			Allocated:    diskItem.Allocated,
+			Status:       diskItem.Status,
+			RestSize:     diskItem.ReservedSpace,
+			DiskRdoSize:  diskItem.DiskRdonlySpace,
+			Partitions:   diskItem.PartitionCount(),
+			Decommission: diskItem.GetDecommissionStatus(),
 		}
 		disks = append(disks, disk)
 	}
@@ -353,6 +356,71 @@ func (s *DataNode) setQosEnable() func(http.ResponseWriter, *http.Request) {
 	}
 }
 
+func (s *DataNode) setDiskQos(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.buildFailureResp(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	parser := func(key string) (val int64, err error, has bool) {
+		valStr := r.FormValue(key)
+		if valStr == "" {
+			return 0, nil, false
+		}
+		has = true
+		val, err = strconv.ParseInt(valStr, 10, 64)
+		return
+	}
+
+	updated := false
+	for key, pVal := range map[string]*int{
+		ConfigDiskReadIocc:  &s.diskReadIocc,
+		ConfigDiskReadIops:  &s.diskReadIops,
+		ConfigDiskReadFlow:  &s.diskReadFlow,
+		ConfigDiskWriteIocc: &s.diskWriteIocc,
+		ConfigDiskWriteIops: &s.diskWriteIops,
+		ConfigDiskWriteFlow: &s.diskWriteFlow,
+	} {
+		val, err, has := parser(key)
+		if err != nil {
+			s.buildFailureResp(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if has {
+			updated = true
+			*pVal = int(val)
+		}
+	}
+
+	if updated {
+		s.updateQosLimit()
+	}
+	s.buildSuccessResp(w, "success")
+}
+
+func (s *DataNode) getDiskQos(w http.ResponseWriter, r *http.Request) {
+	disks := make([]interface{}, 0)
+	for _, diskItem := range s.space.GetDisks() {
+		disk := &struct {
+			Path  string        `json:"path"`
+			Read  LimiterStatus `json:"read"`
+			Write LimiterStatus `json:"write"`
+		}{
+			Path:  diskItem.Path,
+			Read:  diskItem.limitRead.Status(),
+			Write: diskItem.limitWrite.Status(),
+		}
+		disks = append(disks, disk)
+	}
+	diskStatus := &struct {
+		Disks []interface{} `json:"disks"`
+		Zone  string        `json:"zone"`
+	}{
+		Disks: disks,
+		Zone:  s.zoneName,
+	}
+	s.buildSuccessResp(w, diskStatus)
+}
+
 func (s *DataNode) getSmuxPoolStat() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.enableSmuxConnPool {
@@ -441,4 +509,48 @@ func (s *DataNode) buildJSONResp(w http.ResponseWriter, code int, data interface
 		return
 	}
 	w.Write(jsonBody)
+}
+
+func (s *DataNode) setDiskBadAPI(w http.ResponseWriter, r *http.Request) {
+	const (
+		paramDiskPath = "diskPath"
+	)
+	var (
+		err      error
+		diskPath string
+		disk     *Disk
+	)
+
+	if err = r.ParseForm(); err != nil {
+		err = fmt.Errorf("parse form fail: %v", err)
+		log.LogErrorf("[setDiskBadAPI] %v", err.Error())
+		s.buildFailureResp(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if diskPath = r.FormValue(paramDiskPath); diskPath == "" {
+		err = fmt.Errorf("param(%v) is empty", paramDiskPath)
+		log.LogErrorf("[setDiskBadAPI] %v", err.Error())
+		s.buildFailureResp(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if disk, err = s.space.GetDisk(diskPath); err != nil {
+		err = fmt.Errorf("not exit such dissk, path: %v", diskPath)
+		log.LogErrorf("[setDiskBadAPI] %v", err.Error())
+		s.buildFailureResp(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if disk.Status == proto.Unavailable {
+		msg := fmt.Sprintf("disk(%v) status was already unavailable, nothing to do", disk.Path)
+		log.LogInfof("[setDiskBadAPI] %v", msg)
+		s.buildSuccessResp(w, msg)
+		return
+	}
+
+	log.LogWarnf("[setDiskBadAPI] set bad disk, path: %v", disk.Path)
+	disk.doDiskError()
+
+	s.buildSuccessResp(w, "OK")
 }

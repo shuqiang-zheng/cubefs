@@ -3,8 +3,9 @@ package metanode
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/cubefs/cubefs/util/log"
 	"sync"
+
+	"github.com/cubefs/cubefs/util/log"
 
 	"github.com/cubefs/cubefs/storage"
 
@@ -177,7 +178,6 @@ func (se *SortedExtents) SplitWithCheck(mpId uint64, inodeID uint64, ekSplit pro
 		status = proto.OpArgMismatchErr
 		return
 	}
-	ekSplit.SetSplit(true)
 	lastKey := se.eks[len(se.eks)-1]
 	if lastKey.FileOffset+uint64(lastKey.Size) <= ekSplit.FileOffset {
 		log.LogErrorf("[SplitWithCheck] mpId [%v]. inode %v eks do split not found", mpId, inodeID)
@@ -258,6 +258,7 @@ func (se *SortedExtents) SplitWithCheck(mpId uint64, inodeID uint64, ekSplit pro
 		var keyBefore *proto.ExtentKey
 		if len(se.eks) > 0 {
 			keyBefore = &se.eks[len(se.eks)-1]
+			log.LogDebugf("SplitWithCheck. mpId [%v].keyBefore. ek %v and ekSplit %v", mpId, keyBefore, ekSplit)
 		}
 		if keyBefore != nil && keyBefore.IsSequence(&ekSplit) {
 			log.LogDebugf("SplitWithCheck. mpId [%v]. inode %v  keyBefore [%v], ekSplit [%v]", mpId, inodeID, keyBefore, ekSplit)
@@ -347,7 +348,6 @@ func (se *SortedExtents) AppendWithCheck(inodeID uint64, ek proto.ExtentKey, add
 	if lastKey.FileOffset+uint64(lastKey.Size) <= ek.FileOffset {
 		se.eks = append(se.eks, ek)
 		if lastKey.IsSequenceWithDiffSeq(&ek) {
-			se.eks[idx].SetSplit(true)
 			addRefFunc(lastKey)
 			addRefFunc(&ek)
 		}
@@ -356,6 +356,7 @@ func (se *SortedExtents) AppendWithCheck(inodeID uint64, ek proto.ExtentKey, add
 
 	if lastKey.FileOffset == ek.FileOffset &&
 		lastKey.PartitionId == ek.PartitionId &&
+		lastKey.ExtentId == ek.ExtentId &&
 		lastKey.ExtentOffset == ek.ExtentOffset && lastKey.Size < ek.Size &&
 		lastKey.GetSeq() < ek.GetSeq() {
 		if len(discard) > 0 {
@@ -367,7 +368,9 @@ func (se *SortedExtents) AppendWithCheck(inodeID uint64, ek proto.ExtentKey, add
 		ek.ExtentOffset = ek.ExtentOffset + uint64(lastKey.Size)
 		ek.Size = ek.Size - lastKey.Size
 		log.LogDebugf("action[AppendWithCheck] after split append key %v", ek)
-		addRefFunc(lastKey)
+		if !lastKey.IsSplit() {
+			addRefFunc(lastKey)
+		}
 		addRefFunc(&ek)
 		se.eks = append(se.eks, ek)
 		return
@@ -425,6 +428,18 @@ func (se *SortedExtents) AppendWithCheck(inodeID uint64, ek proto.ExtentKey, add
 		return deleteExtents, proto.OpConflictExtentsErr
 	}
 
+	defer func() {
+		if startIndex == 0 {
+			return
+		}
+		if se.eks[startIndex-1].IsSequenceWithDiffSeq(&se.eks[startIndex]) {
+			if !se.eks[startIndex-1].IsSplit() {
+				addRefFunc(&se.eks[startIndex-1])
+			}
+			addRefFunc(&se.eks[startIndex])
+		}
+	}()
+
 	if len(invalidExtents) == 0 {
 		se.insert(ek, startIndex)
 		return
@@ -435,7 +450,7 @@ func (se *SortedExtents) AppendWithCheck(inodeID uint64, ek proto.ExtentKey, add
 	return
 }
 
-func (se *SortedExtents) Truncate(offset uint64, doOnLastKey func(*proto.ExtentKey)) (deleteExtents []proto.ExtentKey) {
+func (se *SortedExtents) Truncate(offset uint64, doOnLastKey func(*proto.ExtentKey), insertRefMap func(ek *proto.ExtentKey)) (deleteExtents []proto.ExtentKey) {
 	var endIndex int
 
 	se.Lock()
@@ -464,15 +479,21 @@ func (se *SortedExtents) Truncate(offset uint64, doOnLastKey func(*proto.ExtentK
 			if doOnLastKey != nil {
 				doOnLastKey(&proto.ExtentKey{Size: uint32(lastKey.FileOffset + uint64(lastKey.Size) - offset)})
 			}
-			rsKey := *lastKey
+			rsKey := &proto.ExtentKey{}
+			*rsKey = *lastKey
 			lastKey.Size = uint32(offset - lastKey.FileOffset)
+			if insertRefMap != nil {
+				insertRefMap(lastKey)
+			}
 
 			rsKey.Size -= lastKey.Size
 			rsKey.FileOffset += uint64(lastKey.Size)
 			rsKey.ExtentOffset += uint64(lastKey.Size)
-			rsKey.SetSplit(true) // the delete key not the last one
+			if insertRefMap != nil {
+				insertRefMap(rsKey)
+			}
 
-			deleteExtents = append([]proto.ExtentKey{rsKey}, deleteExtents...)
+			deleteExtents = append([]proto.ExtentKey{*rsKey}, deleteExtents...)
 			log.LogDebugf("SortedExtents.Truncate rsKey %v, deleteExtents %v", rsKey, deleteExtents)
 		}
 	}

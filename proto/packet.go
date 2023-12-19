@@ -203,7 +203,6 @@ const (
 	OpNotPerm            uint8 = 0xFD
 	OpNotEmpty           uint8 = 0xFE
 	OpOk                 uint8 = 0xF0
-	OpTryOtherExtent     uint8 = 0xE0
 	OpAgainVerionList    uint8 = 0xEF
 
 	OpPing                  uint8 = 0xFF
@@ -242,6 +241,7 @@ const (
 	// multiVersion to dp/mp
 	OpVersionOperation uint8 = 0xD5
 	OpSplitMarkDelete  uint8 = 0xD6
+	OpTryOtherExtent   uint8 = 0xD7
 )
 
 const (
@@ -262,7 +262,7 @@ const (
 	DeleteVersion        = 2
 	CreateVersionPrepare = 3
 	CreateVersionCommit  = 4
-	SyncAllVersionList   = 5
+	SyncBatchVersionList = 5
 )
 
 // stage of version building
@@ -354,8 +354,8 @@ func (p *Packet) GetCopy() *Packet {
 }
 
 func (p *Packet) String() string {
-	return fmt.Sprintf("ReqID(%v)Op(%v)PartitionID(%v)ResultCode(%v)ExID(%v)ExtOffset(%v)KernelOff(%v)Type(%v)Seq(%v)",
-		p.ReqID, p.GetOpMsg(), p.PartitionID, p.GetResultMsg(), p.ExtentID, p.ExtentOffset, p.KernelOffset, p.ExtentType, p.VerSeq)
+	return fmt.Sprintf("ReqID(%v)Op(%v)PartitionID(%v)ResultCode(%v)ExID(%v)ExtOffset(%v)KernelOff(%v)Type(%v)Seq(%v)Size(%v)",
+		p.ReqID, p.GetOpMsg(), p.PartitionID, p.GetResultMsg(), p.ExtentID, p.ExtentOffset, p.KernelOffset, p.ExtentType, p.VerSeq, p.Size)
 }
 
 // GetStoreType returns the store type.
@@ -875,6 +875,12 @@ func ReadFull(c net.Conn, buf *[]byte, readSize int) (err error) {
 	return
 }
 
+func (p *Packet) IsReadOperation() bool {
+	return p.Opcode == OpStreamRead || p.Opcode == OpRead ||
+		p.Opcode == OpExtentRepairRead || p.Opcode == OpReadTinyDeleteRecord ||
+		p.Opcode == OpTinyExtentRepairRead || p.Opcode == OpStreamFollowerRead
+}
+
 // ReadFromConn reads the data from the given connection.
 // Recognize the version bit and parse out version,
 // to avoid version field rsp back , the rsp of random write from datanode with replace OpRandomWriteVer to OpRandomWriteVerRsp
@@ -941,7 +947,7 @@ func (p *Packet) ReadFromConnWithVer(c net.Conn, timeoutSec int) (err error) {
 		return syscall.EBADMSG
 	}
 	size := p.Size
-	if (p.Opcode == OpRead || p.Opcode == OpStreamRead || p.Opcode == OpExtentRepairRead || p.Opcode == OpStreamFollowerRead) && p.ResultCode == OpInitResultCode {
+	if p.IsReadOperation() && p.ResultCode == OpInitResultCode {
 		size = 0
 	}
 	p.Data = make([]byte, size)

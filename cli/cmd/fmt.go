@@ -148,6 +148,7 @@ func formatSimpleVolView(svv *proto.SimpleVolView) string {
 	sb.WriteString(fmt.Sprintf("  Tx conflict retry interval(ms)  : %v\n", svv.TxConflictRetryInterval))
 	sb.WriteString(fmt.Sprintf("  Tx limit interval(s)            : %v\n", svv.TxOpLimit))
 	sb.WriteString(fmt.Sprintf("  Forbidden                       : %v\n", svv.Forbidden))
+	sb.WriteString(fmt.Sprintf("  EnableAuditLog                  : %v\n", svv.EnableAuditLog))
 	sb.WriteString(fmt.Sprintf("  Quota                           : %v\n", formatEnabledDisabled(svv.EnableQuota)))
 	if svv.VolType == 1 {
 		sb.WriteString(fmt.Sprintf("  ObjBlockSize         : %v byte\n", svv.ObjBlockSize))
@@ -864,9 +865,10 @@ func formatQuotaInfo(info *proto.QuotaInfo) string {
 var badDiskDetailTableRowPattern = "%-18v    %-18v    %-18v    %-18v    %-18v"
 
 func formatBadDiskTableHeader() string {
-	return fmt.Sprintf(badDiskDetailTableRowPattern, "Address", "Path", "TotalPartitionCnt", "DiskErrPartitionCnt", "DiskErrPartitionList")
+	return fmt.Sprintf(badDiskDetailTableRowPattern, "Address", "Path", "TotalPartitionCnt", "DiskErrPartitionCnt", "PartitionIdsWithDiskErr")
 }
 
 func formatBadDiskInfoRow(disk proto.BadDiskInfo) string {
-	return fmt.Sprintf(badDiskDetailTableRowPattern, disk.Address, disk.Path, disk.TotalPartitionCnt, len(disk.DiskErrPartitionList), disk.DiskErrPartitionList)
+	msgDpIdList := fmt.Sprintf("%v", disk.DiskErrPartitionList)
+	return fmt.Sprintf(badDiskDetailTableRowPattern, disk.Address, disk.Path, disk.TotalPartitionCnt, len(disk.DiskErrPartitionList), msgDpIdList)
 }

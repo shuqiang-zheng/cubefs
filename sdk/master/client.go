@@ -183,12 +183,10 @@ func (c *MasterClient) serveRequest(r *request) (repsData []byte, err error) {
 			// o represent proto.ErrCodeSuccess
 			if body.Code != 0 {
 				log.LogWarnf("serveRequest: code[%v], msg[%v], data[%v] ", body.Code, body.Msg, body.Data)
-				if body.Code == proto.ErrCodeInternalError && len(body.Msg) != 0 {
+				if body.Code == proto.ErrCodeInternalError && len(body.Msg) > 0 {
 					return nil, errors.New(body.Msg)
-				} else {
-					return nil, proto.ParseErrorCode(body.Code)
 				}
-
+				return nil, proto.ParseErrorCode(body.Code)
 			}
 			return []byte(body.Data), nil
 		default:
@@ -332,7 +330,7 @@ func (mc *MasterCLientWithResolver) Start() (err error) {
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(mc.updateInverval) * time.Minute)
-		//timer := time.NewTimer(0)
+		// timer := time.NewTimer(0)
 		defer ticker.Stop()
 		for {
 			select {
@@ -348,7 +346,7 @@ func (mc *MasterCLientWithResolver) Start() (err error) {
 					}
 
 				}
-				//timer.Reset(time.Duration(mc.updateInverval) * time.Minute)
+				// timer.Reset(time.Duration(mc.updateInverval) * time.Minute)
 			}
 		}
 	}()

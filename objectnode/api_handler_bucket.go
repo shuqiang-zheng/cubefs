@@ -53,6 +53,10 @@ func (o *ObjectNode) createBucketHandler(w http.ResponseWriter, r *http.Request)
 		o.errorResponse(w, r, err, errorCode)
 	}()
 
+	if o.disableCreateBucketByS3 {
+		errorCode = DisableCreateBucketByS3
+		return
+	}
 	param := ParseRequestParam(r)
 	bucket := param.Bucket()
 	if bucket == "" {
@@ -85,29 +89,30 @@ func (o *ObjectNode) createBucketHandler(w http.ResponseWriter, r *http.Request)
 	}
 	defer rateLimit.ReleaseLimitResource(userInfo.UserID, param.apiName)
 
-	_, errorCode = VerifyContentLength(r, BodyLimit)
+	length, errorCode := VerifyContentLength(r, BodyLimit)
 	if errorCode != nil {
 		return
 	}
-	requestBytes, err := ioutil.ReadAll(r.Body)
-	if err != nil && err != io.EOF {
-		log.LogErrorf("createBucketHandler: read request body fail: requestID(%v) err(%v)", GetRequestID(r), err)
-		return
-	}
-
-	createBucketRequest := &CreateBucketRequest{}
-	err = UnmarshalXMLEntity(requestBytes, createBucketRequest)
-	if err != nil {
-		log.LogErrorf("createBucketHandler: unmarshal xml fail: requestID(%v) err(%v)",
-			GetRequestID(r), err)
-		errorCode = InvalidArgument
-		return
-	}
-	if createBucketRequest.LocationConstraint != o.region {
-		log.LogErrorf("createBucketHandler: location constraint not match the service: requestID(%v) LocationConstraint(%v) region(%v)",
-			GetRequestID(r), createBucketRequest.LocationConstraint, o.region)
-		errorCode = InvalidLocationConstraint
-		return
+	if length > 0 {
+		requestBytes, err := ioutil.ReadAll(r.Body)
+		if err != nil && err != io.EOF {
+			log.LogErrorf("createBucketHandler: read request body fail: requestID(%v) err(%v)", GetRequestID(r), err)
+			return
+		}
+		createBucketRequest := &CreateBucketRequest{}
+		err = UnmarshalXMLEntity(requestBytes, createBucketRequest)
+		if err != nil {
+			log.LogErrorf("createBucketHandler: unmarshal xml fail: requestID(%v) err(%v)",
+				GetRequestID(r), err)
+			errorCode = InvalidArgument
+			return
+		}
+		if createBucketRequest.LocationConstraint != o.region {
+			log.LogErrorf("createBucketHandler: location constraint not match the service: requestID(%v) LocationConstraint(%v) region(%v)",
+				GetRequestID(r), createBucketRequest.LocationConstraint, o.region)
+			errorCode = InvalidLocationConstraint
+			return
+		}
 	}
 
 	var acl *AccessControlPolicy
@@ -245,7 +250,12 @@ func (o *ObjectNode) listBucketsHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var output listBucketsOutput
-	for _, ownVol := range userInfo.Policy.OwnVols {
+	authVos := userInfo.Policy.AuthorizedVols
+	ownVols := userInfo.Policy.OwnVols
+	for vol := range authVos {
+		ownVols = append(ownVols, vol)
+	}
+	for _, ownVol := range ownVols {
 		var vol *Volume
 		if vol, err = o.getVol(ownVol); err != nil {
 			log.LogErrorf("listBucketsHandler: load volume fail: requestID(%v) volume(%v) err(%v)",

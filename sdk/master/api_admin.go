@@ -507,9 +507,19 @@ func (api *AdminAPI) GetVolumeSimpleInfo(volName string) (vv *proto.SimpleVolVie
 }
 
 func (api *AdminAPI) SetVolumeForbidden(volName string, forbidden bool) (err error) {
-	request := newAPIRequest(http.MethodGet, proto.AdminVolForbidden)
+	request := newAPIRequest(http.MethodPost, proto.AdminVolForbidden)
 	request.addParam("name", volName)
 	request.addParam("forbidden", strconv.FormatBool(forbidden))
+	if _, err = api.mc.serveRequest(request); err != nil {
+		return
+	}
+	return
+}
+
+func (api *AdminAPI) SetVolumeAuditLog(volName string, enable bool) (err error) {
+	request := newAPIRequest(http.MethodPost, proto.AdminVolEnableAuditLog)
+	request.addParam("name", volName)
+	request.addParam("enable", strconv.FormatBool(enable))
 	if _, err = api.mc.serveRequest(request); err != nil {
 		return
 	}
@@ -818,6 +828,26 @@ func (api *AdminAPI) QueryBadDisks() (badDisks *proto.BadDiskInfos, err error) {
 	}
 	badDisks = &proto.BadDiskInfos{}
 	if err = json.Unmarshal(buf, &badDisks); err != nil {
+		return
+	}
+	return
+}
+
+func (api *AdminAPI) DecommissionDisk(addr string, disk string) (err error) {
+	request := newAPIRequest(http.MethodPost, proto.DecommissionDisk)
+	request.params["addr"] = addr
+	request.params["disk"] = disk
+	if _, err = api.mc.serveRequest(request); err != nil {
+		return
+	}
+	return
+}
+
+func (api *AdminAPI) RecommissionDisk(addr string, disk string) (err error) {
+	request := newAPIRequest(http.MethodPost, proto.RecommissionDisk)
+	request.params["addr"] = addr
+	request.params["disk"] = disk
+	if _, err = api.mc.serveRequest(request); err != nil {
 		return
 	}
 	return

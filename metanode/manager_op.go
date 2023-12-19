@@ -37,7 +37,7 @@ const (
 )
 
 func (m *metadataManager) checkFollowerRead(volNames []string, partition MetaPartition) {
-	volName := partition.GetBaseConfig().VolName
+	volName := partition.GetVolName()
 	for _, name := range volNames {
 		if name == volName {
 			partition.SetFollowerRead(true)
@@ -49,7 +49,7 @@ func (m *metadataManager) checkFollowerRead(volNames []string, partition MetaPar
 }
 
 func (m *metadataManager) checkForbiddenVolume(volNames []string, partition MetaPartition) {
-	volName := partition.GetBaseConfig().VolName
+	volName := partition.GetVolName()
 	for _, name := range volNames {
 		if name == volName {
 			partition.SetForbidden(true)
@@ -57,6 +57,18 @@ func (m *metadataManager) checkForbiddenVolume(volNames []string, partition Meta
 		}
 	}
 	partition.SetForbidden(false)
+	return
+}
+
+func (m *metadataManager) checkDisableAuditLogVolume(volNames []string, partition MetaPartition) {
+	volName := partition.GetVolName()
+	for _, name := range volNames {
+		if name == volName {
+			partition.SetEnableAuditLog(false)
+			return
+		}
+	}
+	partition.SetEnableAuditLog(true)
 	return
 }
 
@@ -97,6 +109,7 @@ func (m *metadataManager) opMasterHeartbeat(conn net.Conn, p *Packet,
 		m.Range(true, func(id uint64, partition MetaPartition) bool {
 			m.checkFollowerRead(req.FLReadVols, partition)
 			m.checkForbiddenVolume(req.ForbiddenVols, partition)
+			m.checkDisableAuditLogVolume(req.DisableAuditVols, partition)
 			partition.SetUidLimit(req.UidLimitInfo)
 			partition.SetTxInfo(req.TxInfo)
 			partition.setQuotaHbInfo(req.QuotaHbInfos)
@@ -209,6 +222,7 @@ func (m *metadataManager) opCreateInode(conn net.Conn, p *Packet,
 
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 
@@ -241,6 +255,7 @@ func (m *metadataManager) opQuotaCreateInode(conn net.Conn, p *Packet, remoteAdd
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.QuotaCreateInode(req, p, remoteAddr)
@@ -272,6 +287,7 @@ func (m *metadataManager) opTxMetaLinkInode(conn net.Conn, p *Packet, remoteAddr
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.TxCreateInodeLink(req, p, remoteAddr)
@@ -303,6 +319,7 @@ func (m *metadataManager) opMetaLinkInode(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.CreateInodeLink(req, p, remoteAddr)
@@ -354,6 +371,7 @@ func (m *metadataManager) opTxCreateDentry(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.TxCreateDentry(req, p, remoteAddr)
@@ -569,6 +587,7 @@ func (m *metadataManager) opCreateDentry(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.CreateDentry(req, p, remoteAddr)
@@ -601,6 +620,7 @@ func (m *metadataManager) opQuotaCreateDentry(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.QuotaCreateDentry(req, p, remoteAddr)
@@ -666,6 +686,7 @@ func (m *metadataManager) opDeleteDentry(conn net.Conn, p *Packet,
 
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 
@@ -700,6 +721,7 @@ func (m *metadataManager) opBatchDeleteDentry(conn net.Conn, p *Packet,
 
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 
@@ -732,6 +754,7 @@ func (m *metadataManager) opTxUpdateDentry(conn net.Conn, p *Packet, remoteAddr 
 
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.TxUpdateDentry(req, p, remoteAddr)
@@ -764,6 +787,7 @@ func (m *metadataManager) opUpdateDentry(conn net.Conn, p *Packet,
 
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 
@@ -797,6 +821,7 @@ func (m *metadataManager) opTxMetaUnlinkInode(conn net.Conn, p *Packet, remoteAd
 
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.TxUnlinkInode(req, p, remoteAddr)
@@ -828,6 +853,7 @@ func (m *metadataManager) opMetaUnlinkInode(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.UnlinkInode(req, p, remoteAddr)
@@ -859,6 +885,7 @@ func (m *metadataManager) opMetaBatchUnlinkInode(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.UnlinkInodeBatch(req, p, remoteAddr)
@@ -1015,6 +1042,7 @@ func (m *metadataManager) opBatchMetaEvictInode(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	if err = mp.EvictInodeBatch(req, p, remoteAddr); err != nil {
@@ -1048,6 +1076,7 @@ func (m *metadataManager) opMetaEvictInode(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	if err = mp.EvictInode(req, p, remoteAddr); err != nil {
@@ -1083,6 +1112,7 @@ func (m *metadataManager) opSetAttr(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	if err = mp.SetAttr(req, p.Data, p); err != nil {
@@ -1143,6 +1173,7 @@ func (m *metadataManager) opMetaExtentsAdd(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.ExtentAppend(req, p)
@@ -1179,6 +1210,7 @@ func (m *metadataManager) opMetaExtentAddWithCheck(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 
@@ -1299,6 +1331,7 @@ func (m *metadataManager) opMetaExtentsTruncate(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	mp.ExtentsTruncate(req, p, remoteAddr)
@@ -1771,6 +1804,7 @@ func (m *metadataManager) opMetaUpdateXAttr(conn net.Conn, p *Packet, remoteAddr
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.UpdateXAttr(req, p)
@@ -1801,6 +1835,7 @@ func (m *metadataManager) opMetaSetXAttr(conn net.Conn, p *Packet, remoteAddr st
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.SetXAttr(req, p)
@@ -1831,6 +1866,7 @@ func (m *metadataManager) opMetaBatchSetXAttr(conn net.Conn, p *Packet, remoteAd
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.BatchSetXAttr(req, p)
@@ -1936,6 +1972,7 @@ func (m *metadataManager) opMetaRemoveXAttr(conn net.Conn, p *Packet, remoteAddr
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.RemoveXAttr(req, p)
@@ -1991,6 +2028,7 @@ func (m *metadataManager) opMetaBatchExtentsAdd(conn net.Conn, p *Packet, remote
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	err = mp.BatchExtentAppend(req, p)
@@ -2185,6 +2223,7 @@ func (m *metadataManager) opTxCreateInode(conn net.Conn, p *Packet,
 	}
 	if err = m.checkMultiVersionStatus(mp, p); err != nil {
 		err = errors.NewErrorf("[%v],req[%v],err[%v]", p.GetOpMsgWithReqAndResult(), req, string(p.Data))
+		m.respondToClientWithVer(conn, p)
 		return
 	}
 	if !m.serveProxy(conn, mp, p) {
@@ -2369,7 +2408,7 @@ func (m *metadataManager) checkVolVerList() (err error) {
 	)
 
 	log.LogDebugf("checkVolVerList start")
-	m.Range(false, func(id uint64, partition MetaPartition) bool {
+	m.Range(true, func(id uint64, partition MetaPartition) bool {
 		volumeArr[partition.GetVolName()] = true
 		return true
 	})
@@ -2381,7 +2420,9 @@ func (m *metadataManager) checkVolVerList() (err error) {
 			if partition.GetVolName() != volName {
 				return true
 			}
-			mpsVerlist[partition.GetBaseConfig().PartitionId] = &proto.VolVersionInfoList{VerList: partition.GetVerList()}
+			log.LogDebugf("action[checkVolVerList] volumeName %v id %v dp verlist %v partition.GetBaseConfig().PartitionId %v",
+				volName, id, partition.GetVerList(), partition.GetBaseConfig().PartitionId)
+			mpsVerlist[id] = &proto.VolVersionInfoList{VerList: partition.GetVerList()}
 			return true
 		})
 		var info *proto.VolVersionInfoList
@@ -2395,6 +2436,7 @@ func (m *metadataManager) checkVolVerList() (err error) {
 			if partition.GetVolName() != volName {
 				return true
 			}
+			log.LogDebugf("action[checkVolVerList] volumeName %v info %v id %v ", volName, info, id)
 			if _, exist := mpsVerlist[id]; exist {
 				if err = partition.checkByMasterVerlist(mpsVerlist[id], info); err != nil {
 					return true
@@ -2412,34 +2454,32 @@ func (m *metadataManager) checkVolVerList() (err error) {
 func (m *metadataManager) commitCreateVersion(VolumeID string, VerSeq uint64, Op uint8, synchronize bool) (err error) {
 
 	log.LogWarnf("action[commitCreateVersion] volume %v seq %v", VolumeID, VerSeq)
-
-	m.mu.RLock()
 	var wg sync.WaitGroup
-	wg.Add(len(m.partitions))
+	// wg.Add(len(m.partitions))
 	resultCh := make(chan error, len(m.partitions))
-	m.Range(false, func(id uint64, partition MetaPartition) bool {
-		go func() {
-			if partition.GetVolName() == VolumeID {
-				if _, ok := partition.IsLeader(); !ok {
-					wg.Done()
-					return
-				}
-				log.LogInfof("action[commitCreateVersion] volume %v mp  %v do HandleVersionOp verseq %v", VolumeID, id, VerSeq)
-				if err = partition.HandleVersionOp(Op, VerSeq, nil, synchronize); err != nil {
-					log.LogErrorf("action[commitCreateVersion] volume %v mp  %v do HandleVersionOp verseq %v err %v", VolumeID, id, VerSeq, err)
-					wg.Done()
-					resultCh <- err
-					return
-				}
+	m.Range(true, func(id uint64, partition MetaPartition) bool {
+		if partition.GetVolName() != VolumeID {
+			return true
+		}
+
+		if _, ok := partition.IsLeader(); !ok {
+			return true
+		}
+
+		wg.Add(1)
+		go func(mpId uint64, mp MetaPartition) {
+			defer wg.Done()
+			log.LogInfof("action[commitCreateVersion] volume %v mp  %v do HandleVersionOp verseq %v", VolumeID, mpId, VerSeq)
+			if err := mp.HandleVersionOp(Op, VerSeq, nil, synchronize); err != nil {
+				log.LogErrorf("action[commitCreateVersion] volume %v mp  %v do HandleVersionOp verseq %v err %v", VolumeID, mpId, VerSeq, err)
+				resultCh <- err
+				return
 			}
-			wg.Done()
-			return
-		}()
+		}(id, partition)
 		return true
 	})
-	wg.Wait()
-	m.mu.RUnlock()
 
+	wg.Wait()
 	select {
 	case err = <-resultCh:
 		if err != nil {
@@ -2503,7 +2543,7 @@ func (m *metadataManager) checkMultiVersionStatus(mp MetaPartition, p *Packet) (
 	}
 	// meta node do not need to check verSeq as strictly as datanode,file append or modAppendWrite on meta node is invisible to other files.
 	// only need to guarantee the verSeq wrote on meta nodes grow up linearly on client's angle
-	log.LogDebugf("action[checkmultiSnap.multiVersionstatus] mp ver %v, packet ver %v", mp.GetVerSeq(), p.VerSeq)
+	log.LogDebugf("action[checkmultiSnap.multiVersionstatus] mp %v ver %v, packet ver %v", mp.GetBaseConfig().PartitionId, mp.GetVerSeq(), p.VerSeq)
 	if mp.GetVerSeq() >= p.VerSeq {
 		if mp.GetVerSeq() > p.VerSeq {
 			log.LogDebugf("action[checkmultiSnap.multiVersionstatus] mp ver %v, packet ver %v", mp.GetVerSeq(), p.VerSeq)
@@ -2517,7 +2557,7 @@ func (m *metadataManager) checkMultiVersionStatus(mp MetaPartition, p *Packet) (
 		_, err = mp.checkVerList(&proto.VolVersionInfoList{VerList: p.VerList}, true)
 		return
 	}
-	p.Opcode = proto.OpAgainVerionList
+	p.ResultCode = proto.OpAgainVerionList
 	// need return and tell client
 	err = fmt.Errorf("vol %v req seq %v but not found commit status", mp.GetVolName(), p.VerSeq)
 	if value, ok := m.volUpdating.Load(mp.GetVolName()); ok {
@@ -2635,7 +2675,10 @@ end:
 	}
 	adminTask.Request = nil
 	adminTask.Response = resp
-	m.respondToMaster(adminTask)
+	if errRsp := m.respondToMaster(adminTask); errRsp != nil {
+		log.LogInfof("action[opMultiVersionOp] %s pkt %s, resp success req:%v; respAdminTask: %v, resp: %v, errRsp %v err %v",
+			remoteAddr, p.String(), req, adminTask, resp, errRsp, err)
+	}
 
 	if log.EnableInfo() {
 		rspData, _ := json.Marshal(resp)

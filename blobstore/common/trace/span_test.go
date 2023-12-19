@@ -17,6 +17,9 @@ package trace
 import (
 	"context"
 	"errors"
+	"hash/maphash"
+	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -221,6 +224,28 @@ func TestSpan_TrackLogWithDuration(t *testing.T) {
 	require.Equal(t, []string{"sleep:1", "sleep2:2/sleep2 err", "blobnode:4", "scheduler:5", "sleep3:3"}, span.TrackLog())
 }
 
+func TestSpan_TrackLogWithFunc(t *testing.T) {
+	span, ctx := StartSpanFromContext(context.Background(), "test trackLog")
+	defer span.Finish()
+
+	span.AppendTrackLogWithFunc("sleep", func() error { time.Sleep(time.Millisecond); return nil })
+	require.Equal(t, 1, len(span.TrackLog()))
+
+	spanChild, _ := StartSpanFromContext(ctx, "child of span")
+	require.Equal(t, 1, len(spanChild.TrackLog()))
+
+	spanChild.AppendTrackLogWithFunc("sleep2", func() error { return errors.New("sleep2 err") })
+	require.Equal(t, 2, len(spanChild.TrackLog()))
+	require.Equal(t, 2, len(span.TrackLog()))
+
+	spanChild.AppendRPCTrackLog([]string{"blobnode:4", "scheduler:5"})
+	require.Equal(t, 4, len(spanChild.TrackLog()))
+	require.Equal(t, 4, len(span.TrackLog()))
+
+	spanChild.AppendTrackLogWithFunc("sleep3", func() error { return nil })
+	require.Equal(t, 5, len(span.TrackLog()))
+}
+
 func TestSpan_BaseLogger(t *testing.T) {
 	originLevel := log.GetOutputLevel()
 	defer log.SetOutputLevel(originLevel)
@@ -307,4 +332,20 @@ func TestSpan_FinishWithOptions(t *testing.T) {
 			{Timestamp: time.Now()},
 		},
 	})
+}
+
+func Benchmark_RandomID_RandLock(b *testing.B) {
+	var l sync.Mutex
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for ii := 0; ii < b.N; ii++ {
+		l.Lock()
+		r.Uint64()
+		l.Unlock()
+	}
+}
+
+func Benchmark_RandomID_Maphash(b *testing.B) {
+	for ii := 0; ii < b.N; ii++ {
+		new(maphash.Hash).Sum64()
+	}
 }

@@ -35,7 +35,6 @@ import (
 	"github.com/cubefs/cubefs/blobstore/blobnode/core"
 	"github.com/cubefs/cubefs/blobstore/blobnode/db"
 	bloberr "github.com/cubefs/cubefs/blobstore/common/errors"
-	"github.com/cubefs/cubefs/blobstore/common/kvstore"
 	"github.com/cubefs/cubefs/blobstore/common/proto"
 	"github.com/cubefs/cubefs/blobstore/common/rpc"
 	"github.com/cubefs/cubefs/blobstore/common/trace"
@@ -188,7 +187,7 @@ func TestService2(t *testing.T) {
 			Host: "127.0.0.1",
 		},
 		Disks: []core.Config{
-			{BaseConfig: core.BaseConfig{Path: path1, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{RocksdbOption: kvstore.RocksDBOption{WriteBufferSize: 1024}}},
+			{BaseConfig: core.BaseConfig{Path: path1, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{}},
 		},
 		Clustermgr: cc,
 	}
@@ -228,8 +227,8 @@ func newTestBlobNodeService(t *testing.T, path string) (*Service, *mockClusterMg
 			Rack: "testRack",
 		},
 		Disks: []core.Config{
-			{BaseConfig: core.BaseConfig{Path: path1, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{RocksdbOption: kvstore.RocksDBOption{WriteBufferSize: 1024}}},
-			{BaseConfig: core.BaseConfig{Path: path2, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{RocksdbOption: kvstore.RocksDBOption{WriteBufferSize: 1024}}},
+			{BaseConfig: core.BaseConfig{Path: path1, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{}},
+			{BaseConfig: core.BaseConfig{Path: path2, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{}},
 		},
 		DiskConfig:           core.RuntimeConfig{DiskReservedSpaceB: 1, CompactReservedSpaceB: 1},
 		Clustermgr:           cc,
@@ -240,14 +239,8 @@ func newTestBlobNodeService(t *testing.T, path string) (*Service, *mockClusterMg
 		ioview := flow.NewDiskViewer(ioFlowStat)
 		conf.DiskConfig.DataQos = qos.Config{
 			DiskBandwidthMBPS: 20,
-			DiskIOPS:          2,
-			LevelConfigs: qos.LevelConfig{"level0": qos.ParaConfig{
-				Iops:      2,
-				Bandwidth: 20,
-				Factor:    0.5,
-			}},
-			DiskViewer: ioview,
-			StatGetter: ioFlowStat,
+			DiskViewer:        ioview,
+			StatGetter:        ioFlowStat,
 		}
 	}
 	if path == "bpslimit" {
@@ -255,14 +248,8 @@ func newTestBlobNodeService(t *testing.T, path string) (*Service, *mockClusterMg
 		ioview := flow.NewDiskViewer(ioFlowStat)
 		conf.DiskConfig.DataQos = qos.Config{
 			DiskBandwidthMBPS: 1,
-			DiskIOPS:          100,
-			LevelConfigs: qos.LevelConfig{"level0": qos.ParaConfig{
-				Iops:      100,
-				Bandwidth: 1,
-				Factor:    0.5,
-			}},
-			DiskViewer: ioview,
-			StatGetter: ioFlowStat,
+			DiskViewer:        ioview,
+			StatGetter:        ioFlowStat,
 		}
 	}
 	service, err := NewService(conf)
@@ -315,15 +302,23 @@ func TestService_CmdpChunk(t *testing.T) {
 			Rack: "testRack",
 		},
 		Disks: []core.Config{
-			{BaseConfig: core.BaseConfig{Path: path1, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{RocksdbOption: kvstore.RocksDBOption{WriteBufferSize: 1024}}},
-			{BaseConfig: core.BaseConfig{Path: path2, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{RocksdbOption: kvstore.RocksDBOption{WriteBufferSize: 1024}}},
+			{BaseConfig: core.BaseConfig{Path: path1, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{}},
+			{BaseConfig: core.BaseConfig{Path: path2, AutoFormat: true, MaxChunks: 700}, MetaConfig: db.MetaConfig{}},
 		},
 		DiskConfig:           core.RuntimeConfig{DiskReservedSpaceB: 1, CompactReservedSpaceB: 1},
 		Clustermgr:           cc,
 		HeartbeatIntervalSec: 600,
 	}
+
+	conf.DiskConfig.MustMountPoint = true
 	service, err := NewService(conf)
 	require.NoError(t, err)
+	require.Equal(t, 0, len(service.Disks)) // len(service.Disks) is 0
+
+	conf.DiskConfig.MustMountPoint = false
+	service, err = NewService(conf)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(service.Disks)) // len(conf.Disks) == len(service.Disks), is 2
 
 	ctx := context.Background()
 	cs, err := service.Disks[proto.DiskID(101)].CreateChunk(ctx, proto.Vuid(2001), 1000)
@@ -669,9 +664,11 @@ func (mcm *mockClusterMgr) DiskSet(c *rpc.Context) {
 }
 
 func (mcm *mockClusterMgr) ChunkReport(c *rpc.Context) {
+	// do nothing
 }
 
 func (mcm *mockClusterMgr) ServiceRegister(c *rpc.Context) {
+	// do nothing
 }
 
 func (mcm *mockClusterMgr) VolumeGet(c *rpc.Context) {

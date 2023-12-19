@@ -190,21 +190,20 @@ func (mp *metaPartition) checkByMasterVerlist(mpVerList *proto.VolVersionInfoLis
 	for _, ver := range masterVerList.VerList {
 		verMapMaster[ver.Ver] = ver
 	}
-	mp.multiVersionList.Lock()
-	defer mp.multiVersionList.Unlock()
+	log.LogDebugf("checkVerList. vol %v mp %v masterVerList %v mpVerList.VerList %v", mp.config.VolName, mp.config.PartitionId, masterVerList, mpVerList.VerList)
+	mp.multiVersionList.RWLock.Lock()
+	defer mp.multiVersionList.RWLock.Unlock()
 	vlen := len(mpVerList.VerList)
 	for id, info2 := range mpVerList.VerList {
 		if id == vlen-1 {
 			break
 		}
-		log.LogDebugf("checkVerList. vol %v mp %v ver info %v", mp.config.VolName, mp.config.PartitionId, info2)
+		log.LogDebugf("checkVerList. vol %v mp %v ver info %v currMasterSeq %v", mp.config.VolName, mp.config.PartitionId, info2, currMasterSeq)
 		_, exist := verMapMaster[info2.Ver]
 		if !exist {
-			if info2.Ver < currMasterSeq {
-				if _, ok := mp.multiVersionList.TemporaryVerMap[info2.Ver]; !ok {
-					log.LogInfof("checkVerList. vol %v mp %v ver info %v be consider as TemporaryVer", mp.config.VolName, mp.config.PartitionId, info2)
-					mp.multiVersionList.TemporaryVerMap[info2.Ver] = info2
-				}
+			if _, ok := mp.multiVersionList.TemporaryVerMap[info2.Ver]; !ok {
+				log.LogInfof("checkVerList. vol %v mp %v ver info %v be consider as TemporaryVer", mp.config.VolName, mp.config.PartitionId, info2)
+				mp.multiVersionList.TemporaryVerMap[info2.Ver] = info2
 			}
 		}
 	}
@@ -212,8 +211,17 @@ func (mp *metaPartition) checkByMasterVerlist(mpVerList *proto.VolVersionInfoLis
 	for verSeq := range mp.multiVersionList.TemporaryVerMap {
 		for index, verInfo := range mp.multiVersionList.VerList {
 			if verInfo.Ver == verSeq {
-				log.LogInfof("checkVerList. vol %v mp %v ver info %v be consider as TemporaryVer and do deletion", mp.config.VolName, mp.config.PartitionId, verInfo)
-				mp.multiVersionList.VerList = append(mp.multiVersionList.VerList[:index], mp.multiVersionList.VerList[index+1:]...)
+				log.LogInfof("checkVerList.updateVerList vol %v mp %v ver info %v be consider as TemporaryVer and do deletion verlist %v",
+					mp.config.VolName, mp.config.PartitionId, verInfo, mp.multiVersionList.VerList)
+				if index == len(mp.multiVersionList.VerList)-1 {
+					log.LogInfof("checkVerList.updateVerList vol %v mp %v last ver info %v should not be consider as TemporaryVer and do deletion verlist %v",
+						mp.config.VolName, mp.config.PartitionId, verInfo, mp.multiVersionList.VerList)
+					return
+				} else {
+					mp.multiVersionList.VerList = append(mp.multiVersionList.VerList[:index], mp.multiVersionList.VerList[index+1:]...)
+				}
+
+				log.LogInfof("checkVerList.updateVerList vol %v mp %v verlist %v", mp.config.VolName, mp.config.PartitionId, mp.multiVersionList.VerList)
 				break
 			}
 		}
@@ -222,7 +230,7 @@ func (mp *metaPartition) checkByMasterVerlist(mpVerList *proto.VolVersionInfoLis
 }
 
 func (mp *metaPartition) checkVerList(reqVerListInfo *proto.VolVersionInfoList, sync bool) (needUpdate bool, err error) {
-	mp.multiVersionList.RLock()
+	mp.multiVersionList.RWLock.RLock()
 	verMapLocal := make(map[uint64]*proto.VolVersionInfo)
 	verMapReq := make(map[uint64]*proto.VolVersionInfo)
 	for _, ver := range reqVerListInfo.VerList {
@@ -250,7 +258,7 @@ func (mp *metaPartition) checkVerList(reqVerListInfo *proto.VolVersionInfoList, 
 			VerList = append(VerList, info2)
 		}
 	}
-	mp.multiVersionList.RUnlock()
+	mp.multiVersionList.RWLock.RUnlock()
 
 	for _, vInfo := range reqVerListInfo.VerList {
 		if vInfo.Status != proto.VersionNormal {
@@ -288,7 +296,7 @@ func (mp *metaPartition) checkVerList(reqVerListInfo *proto.VolVersionInfoList, 
 			lastSeq = VerList[i].Ver
 			return false
 		})
-		if err = mp.HandleVersionOp(proto.SyncAllVersionList, lastSeq, VerList, sync); err != nil {
+		if err = mp.HandleVersionOp(proto.SyncBatchVersionList, lastSeq, VerList, sync); err != nil {
 			return
 		}
 	}
@@ -470,9 +478,11 @@ func (mp *metaPartition) ExtentsTruncate(req *ExtentsTruncateReq, p *Packet, rem
 	}
 	fileSize := uint64(0)
 	start := time.Now()
-	defer func() {
-		auditlog.LogInodeOp(remoteAddr, mp.GetVolName(), p.GetOpMsg(), req.GetFullPath(), err, time.Since(start).Milliseconds(), req.Inode, fileSize)
-	}()
+	if mp.IsEnableAuditLog() {
+		defer func() {
+			auditlog.LogInodeOp(remoteAddr, mp.GetVolName(), p.GetOpMsg(), req.GetFullPath(), err, time.Since(start).Milliseconds(), req.Inode, fileSize)
+		}()
+	}
 	ino := NewInode(req.Inode, proto.Mode(os.ModePerm))
 	item := mp.inodeTree.CopyGet(ino)
 	if item == nil {

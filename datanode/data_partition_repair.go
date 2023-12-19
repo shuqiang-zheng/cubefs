@@ -208,7 +208,7 @@ func (dp *DataPartition) getRemoteExtentInfo(extentType uint8, tinyExtents []uin
 		return
 	}
 	reply := new(repl.Packet)
-	err = reply.ReadFromConn(conn, proto.GetAllWatermarksDeadLineTime) // read the response
+	err = reply.ReadFromConnWithVer(conn, proto.GetAllWatermarksDeadLineTime) // read the response
 	if err != nil {
 		err = errors.Trace(err, "getRemoteExtentInfo DataPartition(%v) read from host(%v)", dp.partitionID, target)
 		return
@@ -429,7 +429,7 @@ func (dp *DataPartition) notifyFollower(wg *sync.WaitGroup, index int, members [
 	if err = p.WriteToConn(conn); err != nil {
 		return err
 	}
-	if err = p.ReadFromConn(conn, proto.NoReadDeadlineTime); err != nil {
+	if err = p.ReadFromConnWithVer(conn, proto.NoReadDeadlineTime); err != nil {
 		return err
 	}
 	return err
@@ -439,10 +439,10 @@ func (dp *DataPartition) notifyFollower(wg *sync.WaitGroup, index int, members [
 func (dp *DataPartition) NotifyExtentRepair(members []*DataPartitionRepairTask) (err error) {
 	wg := new(sync.WaitGroup)
 	for i := 1; i < len(members); i++ {
-		if members[i] == nil || !dp.IsExsitReplica(members[i].addr) {
+		if members[i] == nil || !dp.IsExistReplica(members[i].addr) {
 			if members[i] != nil {
 				log.LogInfof("notify extend repair is change ,index(%v),pid(%v),task_member_add(%v),IsExistReplica(%v)",
-					i, dp.partitionID, members[i].addr, dp.IsExsitReplica(members[i].addr))
+					i, dp.partitionID, members[i].addr, dp.IsExistReplica(members[i].addr))
 			}
 			continue
 		}
@@ -539,7 +539,7 @@ func (dp *DataPartition) streamRepairExtent(remoteExtentInfo *storage.ExtentInfo
 			reply := repl.NewPacket()
 
 			// read 64k streaming repair packet
-			if err = reply.ReadFromConn(conn, 60); err != nil {
+			if err = reply.ReadFromConnWithVer(conn, 60); err != nil {
 				err = errors.Trace(err, "streamRepairExtent receive data error,localExtentSize(%v) remoteExtentSize(%v)", currFixOffset, dstOffset)
 				return
 			}

@@ -1180,7 +1180,7 @@ func (ns *nodeSet) traverseDecommissionDisk(c *Cluster) {
 				status := disk.GetDecommissionStatus()
 				if status == DecommissionRunning {
 					runningCnt++
-				} else if status == DecommissionSuccess || status == DecommissionFail {
+				} else if status == DecommissionSuccess || status == DecommissionFail || status == DecommissionPause {
 					//remove from decommission disk list
 					log.LogWarnf("traverseDecommissionDisk remove disk %v status %v",
 						disk.GenerateKey(), disk.GetDecommissionStatus())
@@ -2136,10 +2136,11 @@ func (l *DecommissionDataPartitionList) Put(id uint64, value *DataPartition, c *
 		value.SetDecommissionStatus(markDecommission)
 	}
 
+	l.mu.Lock()
 	if _, ok := l.cacheMap[value.PartitionID]; ok {
+		l.mu.Unlock()
 		return
 	}
-	l.mu.Lock()
 	elm := l.decommissionList.PushBack(value)
 	l.cacheMap[value.PartitionID] = elm
 	l.mu.Unlock()
@@ -2249,6 +2250,7 @@ func (l *DecommissionDataPartitionList) traverse(c *Cluster) {
 					c.syncUpdateDataPartition(dp)
 				} else if dp.IsDecommissionFailed() {
 					if !dp.tryRollback(c) {
+						dp.restoreReplica(c)
 						log.LogDebugf("action[DecommissionListTraverse]Remove dp[%v] for fail",
 							dp.PartitionID)
 						l.Remove(dp)
@@ -2265,6 +2267,7 @@ func (l *DecommissionDataPartitionList) traverse(c *Cluster) {
 					dp.ResetDecommissionStatus()
 					c.syncUpdateDataPartition(dp)
 				} else if dp.IsMarkDecommission() && dp.TryAcquireDecommissionToken(c) {
+					// TODO: decommission in here
 					go func(dp *DataPartition) {
 						if !dp.TryToDecommission(c) {
 							//retry should release token
