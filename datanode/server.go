@@ -55,6 +55,7 @@ var (
 
 	LocalIP, serverPort         string
 	LocalRdmaIP, rdmaServerPort string
+	isRdma                      bool
 	gConnPool                   = util.NewConnectPool()
 	// MasterClient        = masterSDK.NewMasterClient(nil, false)
 	MasterClient *masterSDK.MasterCLientWithResolver
@@ -227,8 +228,10 @@ func doStart(server common.Server, cfg *config.Config) (err error) {
 		return
 	}
 
-	if err = s.startRDMAService(); err != nil {
-		return
+	if isRdma {
+		if err = s.startRDMAService(); err != nil {
+			return
+		}
 	}
 
 	//smux listening & smux connection pool
@@ -268,11 +271,22 @@ func (s *DataNode) parseConfig(cfg *config.Config) (err error) {
 		regexpPort *regexp.Regexp
 	)
 	LocalIP = cfg.GetString(ConfigKeyLocalIP)
-	LocalRdmaIP = cfg.GetString("rdmaIP")
 	port = cfg.GetString(proto.ListenPort)
-	rdmaServerPort = cfg.GetString("rdmaPort")
 
-	if LocalRdmaIP != "" && rdmaServerPort != "" {
+	isRdma = cfg.GetBoolWithDefault("enableRdma", false)
+	if isRdma {
+		LocalRdmaIP = cfg.GetString("rdmaIP")
+		rdmaServerPort = cfg.GetString("rdmaPort")
+		util.Config.MemBlockNum = int(cfg.GetInt64WithDefault("rdmaMemBlockNum", 8*1024*5))
+		util.Config.MemBlockSize = int(cfg.GetInt64WithDefault("rdmaMemBlockSize", 65536*2))
+		util.Config.MemPoolLevel = int(cfg.GetInt64WithDefault("rdmaMemPoolLevel", 18))
+
+		util.Config.HeaderBlockNum = int(cfg.GetInt64WithDefault("rdmaHeaderBlockNum", 32*1024))
+		util.Config.HeaderPoolLevel = int(cfg.GetInt64WithDefault("rdmaHeaderPoolLevel", 15))
+
+		util.Config.ResponseBlockNum = int(cfg.GetInt64WithDefault("rdmaResponseBlockNum", 32*1024))
+		util.Config.ResponsePoolLevel = int(cfg.GetInt64WithDefault("rdmaResponsePoolLevel", 15))
+
 		stream.StreamRdmaConnPool = util.NewRdmaConnectPool()
 		repl.RdmaConnPool = util.NewRdmaConnectPool()
 	}

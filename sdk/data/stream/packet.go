@@ -49,13 +49,13 @@ func NewWritePacket(inode uint64, fileOffset, storeMode int) *Packet {
 	p.inode = inode
 	p.KernelOffset = uint64(fileOffset)
 	if storeMode == proto.TinyExtentType {
-		if isRdma {
+		if IsRdma {
 			p.Data, _ = rdma.GetDataBuffer(util.DefaultTinySizeLimit, int((time.Second * 2).Microseconds()))
 		} else {
 			p.Data, _ = proto.Buffers.Get(util.DefaultTinySizeLimit)
 		}
 	} else {
-		if isRdma {
+		if IsRdma {
 			p.Data, _ = rdma.GetDataBuffer(util.BlockSize, int((time.Second * 2).Microseconds()))
 		} else {
 			p.Data, _ = proto.Buffers.Get(util.BlockSize)
@@ -79,7 +79,7 @@ func NewOverwritePacket(dp *wrapper.DataPartition, extentID uint64, extentOffset
 	p.Opcode = proto.OpRandomWrite
 	p.inode = inode
 	p.KernelOffset = uint64(fileOffset)
-	if isRdma {
+	if IsRdma {
 		p.Data, _ = rdma.GetDataBuffer(util.BlockSize, int((time.Second * 2).Microseconds()))
 	} else {
 		p.Data, _ = proto.Buffers.Get(util.BlockSize)
