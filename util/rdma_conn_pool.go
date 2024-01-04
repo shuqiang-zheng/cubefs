@@ -36,14 +36,15 @@ const (
 
 var (
 	RdmaEnvInit = false
+	Config      = &rdma.RdmaPoolConfig{}
 	//RdmaConnPool = NewRdmaConnectPool()
 	//StreamRdmaConnPool = NewRdmaConnectPool()
 )
 
 func InitRdmaEnv() {
 	if !RdmaEnvInit {
-		config := &rdma.RdmaPoolConfig{}
-		if err := rdma.InitPool(config); err != nil {
+		//Config = &rdma.RdmaPoolConfig{}
+		if err := rdma.InitPool(Config); err != nil {
 			println("init rdma pool failed")
 			return
 		}

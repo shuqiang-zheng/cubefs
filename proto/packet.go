@@ -22,6 +22,7 @@ import (
 	"github.com/cubefs/cubefs/util/log"
 	"github.com/cubefs/cubefs/util/rdma"
 	"io"
+	syslog "log"
 	"net"
 	"strconv"
 	"sync/atomic"
@@ -787,8 +788,21 @@ func (p *Packet) SendRespToRDMAConn(conn *rdma.Connection) (err error) {
 	}
 	offset += 40
 	log.LogDebugf("offset %v", offset)
-	log.LogDebugf("P.size ", p.Size)
+	syslog.Printf("offset %v", offset)
+	log.LogDebugf("p.size %v", p.Size)
+	syslog.Printf("p.size %v", p.Size)
+	log.LogDebugf("p.Data %v", p.Data)
+	syslog.Printf("p.Data %v", p.Data)
+	syslog.Printf("p.Data %v", string(p.Data))
 	if p.Data != nil && p.Size != 0 {
+		log.LogDebugf("offset1 %v", offset)
+		syslog.Printf("offset1 %v", offset)
+		log.LogDebugf("p.size1 %v", p.Size)
+		syslog.Printf("p.size1 %v", p.Size)
+		log.LogDebugf("p.Data1 %v", p.Data)
+		syslog.Printf("p.Data1 %v", p.Data)
+		syslog.Printf("p.Data1 %v", string(p.Data))
+		time.Sleep(100 * time.Millisecond)
 		copy(respBuff[offset:offset+p.Size], p.Data)
 	}
 	if _, err = conn.SendResp(respBuff); err != nil {

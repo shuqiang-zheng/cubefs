@@ -343,6 +343,9 @@ func (conn *Connection) init(cConn *C.Connection) {
 	conn.rFd = C.open_event_fd()
 	conn.wFd = C.open_event_fd()
 	conn.SetDeadline(time.Now().Add(50 * time.Millisecond))
+	print("setConnContext:")
+	println(cConn)
+	println(unsafe.Pointer(conn))
 	C.setConnContext(cConn, unsafe.Pointer(conn))
 	println("conn set connContext")
 
@@ -816,15 +819,15 @@ func (conn *Connection) RdmaPostRecvResponse(responseBuffer []byte) error {
 }
 
 type RdmaPoolConfig struct {
-	memBlockNum  int
-	memBlockSize int
-	memPoolLevel int
+	MemBlockNum  int
+	MemBlockSize int
+	MemPoolLevel int
 
-	headerBlockNum  int
-	headerPoolLevel int
+	HeaderBlockNum  int
+	HeaderPoolLevel int
 
-	responseBlockNum  int
-	responsePoolLevel int
+	ResponseBlockNum  int
+	ResponsePoolLevel int
 }
 
 func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) error {
@@ -834,26 +837,26 @@ func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) er
 	if gCfg == nil {
 		return nil
 	}
-	if gCfg.memBlockNum != 0 {
-		cCfg.memBlockNum = C.int(gCfg.memBlockNum)
+	if gCfg.MemBlockNum != 0 {
+		cCfg.memBlockNum = C.int(gCfg.MemBlockNum)
 	}
-	if gCfg.memBlockSize != 0 {
-		cCfg.memBlockSize = C.int(gCfg.memBlockSize)
+	if gCfg.MemBlockSize != 0 {
+		cCfg.memBlockSize = C.int(gCfg.MemBlockSize)
 	}
-	if gCfg.memPoolLevel != 0 {
-		cCfg.memPoolLevel = C.int(gCfg.memPoolLevel)
+	if gCfg.MemPoolLevel != 0 {
+		cCfg.memPoolLevel = C.int(gCfg.MemPoolLevel)
 	}
-	if gCfg.headerBlockNum != 0 {
-		cCfg.headerBlockNum = C.int(gCfg.headerBlockNum)
+	if gCfg.HeaderBlockNum != 0 {
+		cCfg.headerBlockNum = C.int(gCfg.HeaderBlockNum)
 	}
-	if gCfg.headerPoolLevel != 0 {
-		cCfg.headerPoolLevel = C.int(gCfg.headerPoolLevel)
+	if gCfg.HeaderPoolLevel != 0 {
+		cCfg.headerPoolLevel = C.int(gCfg.HeaderPoolLevel)
 	}
-	if gCfg.responseBlockNum != 0 {
-		cCfg.responseBlockNum = C.int(gCfg.responseBlockNum)
+	if gCfg.ResponseBlockNum != 0 {
+		cCfg.responseBlockNum = C.int(gCfg.ResponseBlockNum)
 	}
-	if gCfg.responsePoolLevel != 0 {
-		cCfg.responsePoolLevel = C.int(gCfg.responsePoolLevel)
+	if gCfg.ResponsePoolLevel != 0 {
+		cCfg.responsePoolLevel = C.int(gCfg.ResponsePoolLevel)
 	}
 	return nil
 }

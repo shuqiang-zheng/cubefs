@@ -821,6 +821,10 @@ void* getHeaderBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size) {
 }
 
 void setConnContext(Connection* conn, void* connContext) {
+    sprintf(buffer,"setConnContext: conn %d\n",conn);
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: connContext %d\n",connContext);
+    PrintCallback(buffer);
     pthread_spin_lock(&conn->lock);
     conn->connContext = connContext;
     conn->state = CONN_STATE_CONNECTED;

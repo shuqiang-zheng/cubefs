@@ -248,7 +248,7 @@ func (eh *ExtentHandler) sender() {
 			packet.ExtentID = uint64(eh.extID)
 			packet.ExtentOffset = int64(extOffset)
 
-			if isRdma {
+			if IsRdma {
 				packet.Arg = ([]byte)(eh.dp.GetAllRdmaAddrs())
 				log.LogDebugf("packet follower rdma hosts(%v)", eh.dp.GetAllRdmaAddrs())
 				log.LogDebugf("packet follower hosts(%v)", eh.dp.GetAllAddrs())
@@ -266,7 +266,7 @@ func (eh *ExtentHandler) sender() {
 
 			//log.LogDebugf("ExtentHandler sender: extent allocated, eh(%v) dp(%v) extID(%v) packet(%v)", eh, eh.dp, eh.extID, packet.GetUniqueLogId())
 			//TODO
-			if isRdma {
+			if IsRdma {
 				log.LogDebugf("rdma conn write packet start")
 				log.LogDebugf("packet: %v", packet)
 				if err = packet.writeToConn(eh.rdmaConn); err != nil {
@@ -339,7 +339,7 @@ func (eh *ExtentHandler) processReply(packet *Packet) {
 
 	reply := NewReply(packet.ReqID, packet.PartitionID, packet.ExtentID)
 	var err error
-	if isRdma {
+	if IsRdma {
 		err = reply.RecvRespFromRDMAConn(eh.rdmaConn, proto.ReadDeadlineTime)
 		log.LogDebugf("rdma conn recv reply: %v, err: %v", reply, err)
 	} else {
@@ -397,7 +397,7 @@ func (eh *ExtentHandler) processReply(packet *Packet) {
 		eh.key.Size += packet.Size
 	}
 
-	if isRdma {
+	if IsRdma {
 		rdma.ReleaseDataBuffer(packet.Data)
 	} else {
 		proto.Buffers.Put(packet.Data)
@@ -567,7 +567,7 @@ func (eh *ExtentHandler) allocateExtent() (err error) {
 				log.LogWarnf("allocateExtent: exclude dp[%v] for write caused by create extent failed, eh(%v) err(%v) exclude(%v)",
 					dp, eh, err, exclude)
 				eh.stream.client.dataWrapper.RemoveDataPartitionForWrite(dp.PartitionID)
-				if isRdma {
+				if IsRdma {
 					dp.CheckAllRdmaHostsIsAvail(exclude)
 				} else {
 					dp.CheckAllHostsIsAvail(exclude)
@@ -583,7 +583,7 @@ func (eh *ExtentHandler) allocateExtent() (err error) {
 			extID = int(eh.key.ExtentId)
 		}
 
-		if isRdma {
+		if IsRdma {
 			log.LogDebugf("allocateExtent: get rdma conn start")
 			addr := wrapper.GetRdmaAddr(dp.Hosts[0])
 			log.LogDebugf("allocateExtent: addr(%v)", addr)
@@ -613,7 +613,7 @@ func (eh *ExtentHandler) allocateExtent() (err error) {
 
 		// success
 		eh.dp = dp
-		if isRdma {
+		if IsRdma {
 			eh.rdmaConn = rdmaConn
 		} else {
 			eh.conn = conn

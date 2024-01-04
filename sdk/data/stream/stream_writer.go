@@ -38,7 +38,6 @@ const (
 	MaxNewHandlerRetry             = 3
 	MaxPacketErrorCount            = 128
 	MaxDirtyListLen                = 0
-	isRdma                         = true
 )
 
 const (
@@ -49,6 +48,10 @@ const (
 const (
 	streamWriterFlushPeriod       = 3
 	streamWriterIdleTimeoutPeriod = 10
+)
+
+var (
+	IsRdma bool
 )
 
 // OpenRequest defines an open request.
@@ -398,7 +401,7 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 		replyPacket := new(Packet)
 		err = sc.Send(&retry, reqPacket, func(conn net.Conn) (error, bool) {
 			var e error
-			if isRdma {
+			if IsRdma {
 				c, _ := conn.(*rdma.Connection)
 				e = replyPacket.RecvRespFromRDMAConn(c, proto.ReadDeadlineTime)
 			} else {
@@ -419,9 +422,9 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 				e = TryOtherAddrError
 			}
 			return e, false
-		}, isRdma)
+		}, IsRdma)
 
-		if isRdma {
+		if IsRdma {
 			rdma.ReleaseDataBuffer(reqPacket.Data)
 		} else {
 			proto.Buffers.Put(reqPacket.Data)

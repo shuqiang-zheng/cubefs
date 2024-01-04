@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/cubefs/cubefs/util/rdma"
+	syslog "log"
 	"net"
 	"sync"
 
@@ -188,6 +189,7 @@ func (ft *FollowerTransport) readFollowerResult(request *FollowerPacket) (err er
 		reply.ExtentOffset != request.ExtentOffset || reply.CRC != request.CRC || reply.ExtentID != request.ExtentID {
 		err = fmt.Errorf(ActionCheckReply+" request(%v), reply(%v)  ", request.GetUniqueLogId(),
 			reply.GetUniqueLogId())
+		syslog.Printf("reply unmatch request, err %v", err)
 		return
 	}
 
@@ -469,6 +471,7 @@ func (rp *ReplProtocol) writeResponse(reply *Packet) {
 	}
 	if conn, ok := rp.sourceConn.(*rdma.Connection); ok {
 		log.LogDebugf("send resp to rdma conn: packet(%v)", reply)
+		syslog.Printf("send resp to rdma conn: packet(%v)", reply)
 		if err = reply.SendRespToRDMAConn(conn); err != nil {
 			err = fmt.Errorf(reply.LogMessage(ActionWriteToClient, fmt.Sprintf("local(%v)->remote(%v)", rp.sourceConn.LocalAddr().String(),
 				rp.sourceConn.RemoteAddr().String()), reply.StartT, err))
