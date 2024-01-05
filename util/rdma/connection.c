@@ -106,6 +106,9 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
     Response* response;
     int i;
 
+    printf("rdma_max_wqe: %d\n",RDMA_MAX_WQE);
+    sprintf(buffer,"rdma_max_wqe: %d\n",RDMA_MAX_WQE);
+
     printf("headers length: %d\n",headers_length);
     sprintf(buffer,"headers length: %d\n",headers_length);
     PrintCallback(buffer);

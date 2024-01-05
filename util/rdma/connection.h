@@ -11,8 +11,9 @@
 #include <netdb.h>
 #include <unistd.h>
 #include "wait_group.h"
-#include "rdma_proto.h"
 #include "rdma_pool.h"
+#include "rdma_proto.h"
+
 
 static const int trace = 0;
 #define TRACE_PRINT(fn) if (trace) fn

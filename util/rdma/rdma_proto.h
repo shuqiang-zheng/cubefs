@@ -26,7 +26,7 @@ typedef int (*RejectedCb)(struct rdma_cm_id *id, void* ctx);
 
 extern void PrintCallback(char*);
 static char buffer[100];
-int RDMA_MAX_WQE;
+extern int RDMA_MAX_WQE;
 
 typedef struct RequestHeader {//__attribute__((packed))
     uint8_t              Magic;              
