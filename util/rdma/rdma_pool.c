@@ -27,6 +27,9 @@ struct RdmaPoolConfig* getRdmaPoolConfig() {
 
 
     rdmaPoolConfig->responsePoolLevel = 15;
+
+    rdmaPoolConfig->rdmaMaxWQE = 32;
+
     return rdmaPoolConfig;
 }
 
@@ -52,6 +55,9 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
         return C_ERR;
     }
     rdmaPoolConfig = config;
+
+    RDMA_MAX_WQE = rdmaPoolConfig->rdmaMaxWQE;
+
     rdmaPool = (struct RdmaPool*)malloc(sizeof(struct RdmaPool));
     memset(rdmaPool, 0, sizeof(struct RdmaPool)); //rdma TODO: all place use malloc need set zero?
 
@@ -69,6 +75,8 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
     if(rdmaPool->responsePool == NULL) {
         goto error;
     }
+
+
     return C_OK;
 error:
     destroyRdmaPool();
