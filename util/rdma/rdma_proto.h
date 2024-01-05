@@ -13,7 +13,7 @@
 #define C_ERR 0
 #define RDMA_INVALID_OPCODE 0xffff
 
-#define RDMA_MAX_WQE 32
+//#define RDMA_MAX_WQE 1024
 #define SERVER_MAX_CONN 10
 #define SERVER_MAX_CONN 32
 
@@ -26,6 +26,7 @@ typedef int (*RejectedCb)(struct rdma_cm_id *id, void* ctx);
 
 extern void PrintCallback(char*);
 static char buffer[100];
+int RDMA_MAX_WQE;
 
 typedef struct RequestHeader {//__attribute__((packed))
     uint8_t              Magic;              

@@ -828,6 +828,8 @@ type RdmaPoolConfig struct {
 
 	ResponseBlockNum  int
 	ResponsePoolLevel int
+
+	RdmaMaxWQE int
 }
 
 func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) error {
@@ -858,6 +860,10 @@ func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) er
 	if gCfg.ResponsePoolLevel != 0 {
 		cCfg.responsePoolLevel = C.int(gCfg.ResponsePoolLevel)
 	}
+	if gCfg.RdmaMaxWQE != 0 {
+		cCfg.rdmaMaxWQE = C.int(gCfg.RdmaMaxWQE)
+	}
+
 	return nil
 }
 

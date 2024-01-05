@@ -22,7 +22,9 @@ typedef struct RdmaPoolConfig {
     int headerPoolLevel;
 
     int responseBlockNum;
-    int responsePoolLevel; 
+    int responsePoolLevel;
+
+    int rdmaMaxWQE;
 };
 
 extern struct RdmaPool *rdmaPool;

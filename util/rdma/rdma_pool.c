@@ -27,6 +27,9 @@ struct RdmaPoolConfig* getRdmaPoolConfig() {
 
 
     rdmaPoolConfig->responsePoolLevel = 15;
+
+    rdmaPoolConfig->rdmaMaxWQE = 32;
+
     return rdmaPoolConfig;
 }
 
@@ -52,6 +55,9 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
         return C_ERR;
     }
     rdmaPoolConfig = config;
+
+    RDMA_MAX_WQE = rdmaPoolConfig->rdmaMaxWQE;
+
     rdmaPool = (struct RdmaPool*)malloc(sizeof(struct RdmaPool));
     rdmaPool->memoryPool = InitMemoryPool(rdmaPoolConfig->memBlockNum, rdmaPoolConfig->memBlockSize, rdmaPoolConfig->memPoolLevel);
     if(rdmaPool->memoryPool == NULL) {
@@ -67,6 +73,8 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
     if(rdmaPool->responsePool == NULL) {
         goto error;
     }
+
+
     return C_OK;
 error:
     destroyRdmaPool();
