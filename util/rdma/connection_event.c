@@ -1,6 +1,5 @@
 #include "connection_event.h"
 
-
 int getHeaderSize() {
     return sizeof(Header);
 }
@@ -99,6 +98,9 @@ int build_connection(struct ConnectionEvent *conn_ev, Connection *conn) {
     //((struct RdmaContext*)(conn_ev->ctx))->pd = pd; //TODO need to modify ()
     conn->pd = pd;
 
+    printf("min_cqe_num: %d\n",MIN_CQE_NUM);
+    sprintf(buffer,"min_cqe_num: %d\n",MIN_CQE_NUM);
+    PrintCallback(buffer);
     comp_channel = ibv_create_comp_channel(cm_id->verbs);
     if (!comp_channel) {
         //serverLog(LL_WARNING, "RDMA: ibv create comp channel failed");
@@ -111,7 +113,7 @@ int build_connection(struct ConnectionEvent *conn_ev, Connection *conn) {
     conn->comp_channel = comp_channel;
 
     //rdma_comp_vector % cm_id->verbs->num_comp_vectors
-    cq = ibv_create_cq(cm_id->verbs, RDMA_MAX_WQE * 2, NULL, comp_channel, 0);//when -1, cq is null?
+    cq = ibv_create_cq(cm_id->verbs, MIN_CQE_NUM, NULL, comp_channel, 0);//when -1, cq is null?     RDMA_MAX_WQE * 2
     if (!cq) {
         //serverLog(LL_WARNING, "RDMA: ibv create cq failed");
         printf("RDMA: ibv create cq failed: cq:%d\n",cq);
@@ -125,8 +127,8 @@ int build_connection(struct ConnectionEvent *conn_ev, Connection *conn) {
     ibv_req_notify_cq(cq, 0);
 
     memset(&init_attr, 0, sizeof(init_attr));
-    init_attr.cap.max_send_wr = RDMA_MAX_WQE;
-    init_attr.cap.max_recv_wr = RDMA_MAX_WQE;
+    init_attr.cap.max_send_wr = WQ_DEPTH;
+    init_attr.cap.max_recv_wr = WQ_DEPTH;
     init_attr.cap.max_send_sge = device_attr.max_sge;
     init_attr.cap.max_recv_sge = 1;
     init_attr.qp_type = IBV_QPT_RC;

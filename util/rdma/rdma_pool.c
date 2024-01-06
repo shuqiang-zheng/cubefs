@@ -1,5 +1,8 @@
 #include "rdma_pool.h"
 
+WQ_DEPTH = 32;
+MIN_CQE_NUM = 1024;
+
 struct RdmaPool *rdmaPool = NULL;
 struct RdmaPoolConfig *rdmaPoolConfig = NULL;
 
@@ -28,7 +31,8 @@ struct RdmaPoolConfig* getRdmaPoolConfig() {
 
     rdmaPoolConfig->responsePoolLevel = 15;
 
-    rdmaPoolConfig->rdmaMaxWQE = 32;
+    rdmaPoolConfig->wqDepth = 32;
+    rdmaPoolConfig->minCqeNum = 1024;
 
     return rdmaPoolConfig;
 }
@@ -56,7 +60,8 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
     }
     rdmaPoolConfig = config;
 
-    RDMA_MAX_WQE = rdmaPoolConfig->rdmaMaxWQE;
+    WQ_DEPTH = rdmaPoolConfig->wqDepth;
+    MIN_CQE_NUM = rdmaPoolConfig->minCqeNum;
 
     rdmaPool = (struct RdmaPool*)malloc(sizeof(struct RdmaPool));
     rdmaPool->memoryPool = InitMemoryPool(rdmaPoolConfig->memBlockNum, rdmaPoolConfig->memBlockSize, rdmaPoolConfig->memPoolLevel);

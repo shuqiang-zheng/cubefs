@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <infiniband/verbs.h>
 #include "rdma.h"
-#include "rdma_proto.h"
+//#include "rdma_proto.h"
 
 
 

@@ -1,10 +1,10 @@
 #ifndef CONNECTION_EVENT_H
 #define CONNECTION_EVENT_H
 
-#include "wait_group.h"
-#include "queue.h"
+//#include "wait_group.h"
+//#include "queue.h"
 #include "hashmap.h"
-#include "rdma_proto.h"
+//#include "rdma_proto.h"
 #include "rdma_pool.h"
 
 #include <rdma/rdma_cma.h>

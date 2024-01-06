@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 #include "rdma.h"
-#include "rdma_proto.h"
+//#include "rdma_proto.h"
 
 int OnServerConnPreConnect(struct rdma_cm_id *id, void* ctx);
 

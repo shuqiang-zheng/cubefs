@@ -100,14 +100,15 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
     ObjectPool* responsePool = rdmaPool->responsePool;
 
     int access = IBV_ACCESS_LOCAL_WRITE;
-    size_t headers_length = sizeof(Header) * RDMA_MAX_WQE;
-    size_t responses_length = sizeof(Response) * RDMA_MAX_WQE;
+    size_t headers_length = sizeof(Header) * WQ_DEPTH;
+    size_t responses_length = sizeof(Response) * WQ_DEPTH;
     Header* header;
     Response* response;
     int i;
 
-    printf("rdma_max_wqe: %d\n",RDMA_MAX_WQE);
-    sprintf(buffer,"rdma_max_wqe: %d\n",RDMA_MAX_WQE);
+    printf("wq_depth: %d\n",WQ_DEPTH);
+    sprintf(buffer,"wq_depth: %d\n",WQ_DEPTH);
+    PrintCallback(buffer);
 
     printf("headers length: %d\n",headers_length);
     sprintf(buffer,"headers length: %d\n",headers_length);
@@ -116,7 +117,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
     sprintf(buffer,"responses length: %d\n",responses_length);
     PrintCallback(buffer);
 
-    int index = buddy_alloc(headerPool->allocation, RDMA_MAX_WQE);
+    int index = buddy_alloc(headerPool->allocation, WQ_DEPTH);
     sprintf(buffer,"%d\n",index);
     PrintCallback(buffer);
     buddy_dump(headerPool->allocation);
@@ -142,7 +143,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         goto destroy_iobuf;
     }
 
-    index = buddy_alloc(responsePool->allocation, RDMA_MAX_WQE);
+    index = buddy_alloc(responsePool->allocation, WQ_DEPTH);
     buddy_dump(responsePool->allocation);
     s = buddy_size(responsePool->allocation,index);
     printf("index %d (sz = %d)\n",index,s);
@@ -166,7 +167,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         goto destroy_iobuf;
     }
     if (conntype == 1) {//server
-        for (i = 0; i < RDMA_MAX_WQE; i++) {//
+        for (i = 0; i < WQ_DEPTH; i++) {//
             header = conn->header_buf + i;
             if (rdmaPostRecv(conn, header) == C_ERR) {
                 //serverLog(LL_WARNING, "RDMA: post recv failed");
@@ -178,7 +179,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         }
         sprintf(buffer,"555");
         PrintCallback(buffer);
-        for (i = 0; i < RDMA_MAX_WQE; i++) {
+        for (i = 0; i < WQ_DEPTH; i++) {
             response = conn->response_buf + i;
             if(EnQueue(conn->freeList,response) == NULL) { //TODO error handler
                 printf("conn freeList has no more memory can be malloced\n");
@@ -192,7 +193,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         PrintCallback(buffer);
     } else {//client
 
-        for (i = 0; i < RDMA_MAX_WQE; i++) {
+        for (i = 0; i < WQ_DEPTH; i++) {
             response = conn->response_buf + i;
             if (rdmaPostRecv(conn, response) == C_ERR) {
                 printf("responses: RDMA: post recv failed\n");
@@ -203,7 +204,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
 
         }
         
-        for (i = 0; i < RDMA_MAX_WQE; i++) {
+        for (i = 0; i < WQ_DEPTH; i++) {
             header = conn->header_buf + i;
             if(EnQueue(conn->freeList,header) == NULL) { //TODO error handler
                 printf("conn freeList has no more memory can be malloced\n");
@@ -316,7 +317,7 @@ int UpdateConnection(Connection* conn) {
         goto error;
     }
     
-    cq = ibv_create_cq(conn->cm_id->verbs, RDMA_MAX_WQE * 2, NULL, conn->comp_channel, 0);//when -1, cq is null?
+    cq = ibv_create_cq(conn->cm_id->verbs, MIN_CQE_NUM, NULL, conn->comp_channel, 0);//when -1, cq is null?     RDMA_MAX_WQE * 2
     if (!cq) {
         //serverLog(LL_WARNING, "RDMA: ibv create cq failed");
         //TODO error handler
@@ -334,8 +335,8 @@ int UpdateConnection(Connection* conn) {
     conn->cFd = open_event_fd();
 
     memset(&init_attr, 0, sizeof(init_attr));
-    init_attr.cap.max_send_wr = RDMA_MAX_WQE;
-    init_attr.cap.max_recv_wr = RDMA_MAX_WQE;
+    init_attr.cap.max_send_wr = WQ_DEPTH;
+    init_attr.cap.max_recv_wr = WQ_DEPTH;
     init_attr.cap.max_send_sge = device_attr.max_sge;
     init_attr.cap.max_recv_sge = 1;
     init_attr.qp_type = IBV_QPT_RC;
@@ -351,7 +352,7 @@ int UpdateConnection(Connection* conn) {
     }
 
 
-    for (int i = 0; i < RDMA_MAX_WQE; i++) {
+    for (int i = 0; i < WQ_DEPTH; i++) {
         response = conn->response_buf + i;
         if (rdmaPostRecv(conn, response) == C_ERR) {//TODO error handler
             //serverLog(LL_WARNING, "RDMA: post recv failed");
@@ -363,7 +364,7 @@ int UpdateConnection(Connection* conn) {
 
     }
     
-    for (int i = 0; i < RDMA_MAX_WQE; i++) {
+    for (int i = 0; i < WQ_DEPTH; i++) {
         header = conn->header_buf + i;
         if(EnQueue(conn->freeList,header) == NULL) { //TODO error handler
             printf("no more memory can be malloced\n");
