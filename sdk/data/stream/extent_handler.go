@@ -267,7 +267,7 @@ func (eh *ExtentHandler) sender() {
 			//log.LogDebugf("ExtentHandler sender: extent allocated, eh(%v) dp(%v) extID(%v) packet(%v)", eh, eh.dp, eh.extID, packet.GetUniqueLogId())
 			//TODO
 			if IsRdma {
-				log.LogDebugf("rdma conn write packet start")
+				log.LogDebugf("rdma conn write packet start: time[%v]", time.Now())
 				log.LogDebugf("packet: %v", packet)
 				if err = packet.writeToConn(eh.rdmaConn); err != nil {
 					log.LogWarnf("sender writeTo: failed, eh(%v) err(%v) packet(%v)", eh, err, packet)
@@ -276,11 +276,14 @@ func (eh *ExtentHandler) sender() {
 				}
 				log.LogDebugf("rdma conn write packet: %v, err:%v", packet, err)
 			} else {
+				log.LogDebugf("tcp conn write packet start: time[%v]", time.Now())
+				log.LogDebugf("packet: %v", packet)
 				if err = packet.writeToConn(eh.conn); err != nil {
 					log.LogWarnf("sender writeTo: failed, eh(%v) err(%v) packet(%v)", eh, err, packet)
 					eh.setClosed()
 					eh.setRecovery()
 				}
+				log.LogDebugf("tcp conn write packet: %v, err:%v", packet, err)
 			}
 
 			eh.reply <- packet
@@ -342,8 +345,11 @@ func (eh *ExtentHandler) processReply(packet *Packet) {
 	if IsRdma {
 		err = reply.RecvRespFromRDMAConn(eh.rdmaConn, proto.ReadDeadlineTime)
 		log.LogDebugf("rdma conn recv reply: %v, err: %v", reply, err)
+		log.LogDebugf("rdma conn recv reply end: time[%v]\",time.Now()")
 	} else {
 		err = reply.ReadFromConn(eh.conn, proto.ReadDeadlineTime)
+		log.LogDebugf("tcp conn recv reply: %v, err: %v", reply, err)
+		log.LogDebugf("tcp conn recv reply end: time[%v]\",time.Now()")
 	}
 
 	if err != nil {

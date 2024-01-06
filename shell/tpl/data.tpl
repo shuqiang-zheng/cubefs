@@ -13,6 +13,8 @@
   "rdmaHeaderPoolLevel": "15",
   "rdmaResponseBlockNum": "32768",
   "rdmaResponsePoolLevel": "15",
+  "wqDepth": "32",
+  "minCqeNum": "1024",
   "raftHeartbeat": "17330",
   "raftReplica": "17340",
   "raftDir": "_dir_/raftlog/datanode",

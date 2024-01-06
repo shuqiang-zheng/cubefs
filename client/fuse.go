@@ -296,7 +296,8 @@ func main() {
 		util.Config.ResponseBlockNum = int(cfg.GetInt64WithDefault("rdmaResponseBlockNum", 32*1024))
 		util.Config.ResponsePoolLevel = int(cfg.GetInt64WithDefault("rdmaResponsePoolLevel", 15))
 
-		util.Config.RdmaMaxWQE = int(cfg.GetInt64WithDefault("rdmaMaxWQE", 32))
+		util.Config.WqDepth = int(cfg.GetInt64WithDefault("wqDepth", 32))
+		util.Config.MinCqeNum = int(cfg.GetInt64WithDefault("minCqeNum", 1024))
 
 		stream.StreamRdmaConnPool = util.NewRdmaConnectPool()
 	}

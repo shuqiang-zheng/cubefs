@@ -310,7 +310,7 @@ func (rp *ReplProtocol) readPkgAndPrepare() (err error) {
 		log.LogDebugf("action[readPkgAndPrepare] packet(%v) from remote(%v) ",
 			request.GetUniqueLogId(), rp.sourceConn.RemoteAddr().String())
 	*/
-	log.LogDebugf("read pkg and prepare exit")
+	log.LogDebugf("read pkg and prepare time[%v]", time.Now())
 	log.LogDebugf("packet: %v", request)
 	//log.LogDebugf("action[readPkgAndPrepare] packet(%v) op %v from remote(%v) conn(%v) ",
 	//	request.GetUniqueLogId(), request.Opcode, rp.sourceConn.RemoteAddr().String(), rp.sourceConn)
@@ -475,13 +475,16 @@ func (rp *ReplProtocol) writeResponse(reply *Packet) {
 			log.LogErrorf(err.Error())
 			rp.Stop()
 		}
+		log.LogDebugf("send resp to rdma conn: time[%v]", time.Now())
 	} else {
+		log.LogDebugf("send resp to rdma conn: packet(%v)", reply)
 		if err = reply.WriteToConn(rp.sourceConn); err != nil {
 			err = fmt.Errorf(reply.LogMessage(ActionWriteToClient, fmt.Sprintf("local(%v)->remote(%v)", rp.sourceConn.LocalAddr().String(),
 				rp.sourceConn.RemoteAddr().String()), reply.StartT, err))
 			log.LogErrorf(err.Error())
 			rp.Stop()
 		}
+		log.LogDebugf("send resp to tcp conn: time[%v]", time.Now())
 	}
 	/*
 		log.LogDebugf(reply.LogMessage(ActionWriteToClient,

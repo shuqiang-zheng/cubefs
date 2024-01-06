@@ -1,8 +1,8 @@
 #ifndef RDMA_POOL_H
 #define RDMA_POOL_H
 
-#include "memory_pool.h"
-#include "object_pool.h"
+//#include "memory_pool.h"
+//#include "object_pool.h"
 #include "rdma_proto.h"
 
 #define C_OK 1
@@ -25,7 +25,8 @@ typedef struct RdmaPoolConfig {
     int responseBlockNum;
     int responsePoolLevel;
 
-    int rdmaMaxWQE;
+    int wqDepth;
+    int minCqeNum;
 };
 
 extern struct RdmaPool *rdmaPool;

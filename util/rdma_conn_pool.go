@@ -151,6 +151,7 @@ func (rcp *RdmaConnectPool) PutRdmaConn(conn *rdma.Connection, forceClose bool) 
 }
 
 type ClientPool struct {
+	sync.RWMutex
 	objects        chan *RdmaClientObject
 	inUse          map[*rdma.Connection]*RdmaClientObject
 	mincap         int
@@ -228,11 +229,15 @@ func (clientPool *ClientPool) GetRdmaConnFromPool() (conn *rdma.Connection, err 
 			}
 			if o.conn == nil {
 				conn = o.client.Dial()
+				clientPool.Lock()
 				clientPool.inUse[conn] = o
+				clientPool.Unlock()
 			} else {
 				conn = o.conn
 				conn.ReConnect()
+				clientPool.Lock()
 				clientPool.inUse[conn] = o
+				clientPool.Unlock()
 			}
 			return conn, nil
 		}
@@ -241,8 +246,10 @@ func (clientPool *ClientPool) GetRdmaConnFromPool() (conn *rdma.Connection, err 
 
 func (clientPool *ClientPool) PutRdmaConnToPool(conn *rdma.Connection) {
 	conn.Close()
+	clientPool.Lock()
 	o := clientPool.inUse[conn]
 	delete(clientPool.inUse, conn)
+	clientPool.Unlock()
 	select {
 	case clientPool.objects <- o:
 		return

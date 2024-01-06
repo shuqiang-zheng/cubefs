@@ -100,14 +100,15 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
     ObjectPool* responsePool = rdmaPool->responsePool;
 
     int access = IBV_ACCESS_LOCAL_WRITE;
-    size_t headers_length = sizeof(Header) * RDMA_MAX_WQE;
-    size_t responses_length = sizeof(Response) * RDMA_MAX_WQE;
+    size_t headers_length = sizeof(Header) * WQ_DEPTH;
+    size_t responses_length = sizeof(Response) * WQ_DEPTH;
     Header* header;
     Response* response;
     int i;
 
-    printf("rdma_max_wqe: %d\n",RDMA_MAX_WQE);
-    sprintf(buffer,"rdma_max_wqe: %d\n",RDMA_MAX_WQE);
+    printf("wq_depth: %d\n",WQ_DEPTH);
+    sprintf(buffer,"wq_depth: %d\n",WQ_DEPTH);
+    PrintCallback(buffer);
 
     printf("headers length: %d\n",headers_length);
     sprintf(buffer,"headers length: %d\n",headers_length);
@@ -116,7 +117,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
     sprintf(buffer,"responses length: %d\n",responses_length);
     PrintCallback(buffer);
 
-    int index = buddy_alloc(headerPool->allocation, RDMA_MAX_WQE);
+    int index = buddy_alloc(headerPool->allocation, WQ_DEPTH);
     sprintf(buffer,"%d\n",index);
     PrintCallback(buffer);
     buddy_dump(headerPool->allocation);
@@ -141,8 +142,8 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         PrintCallback(buffer);
         goto destroy_iobuf;
     }
-    
-    index = buddy_alloc(responsePool->allocation, RDMA_MAX_WQE);
+
+    index = buddy_alloc(responsePool->allocation, WQ_DEPTH);
     buddy_dump(responsePool->allocation);
     s = buddy_size(responsePool->allocation,index);
     printf("index %d (sz = %d)\n",index,s);
@@ -166,7 +167,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         goto destroy_iobuf;
     }
     if (conntype == 1) {//server
-        for (i = 0; i < RDMA_MAX_WQE; i++) {//
+        for (i = 0; i < WQ_DEPTH; i++) {//
             header = conn->header_buf + i;
             if (rdmaPostRecv(conn, header) == C_ERR) {
                 //serverLog(LL_WARNING, "RDMA: post recv failed");
@@ -178,7 +179,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         }
         sprintf(buffer,"555");
         PrintCallback(buffer);
-        for (i = 0; i < RDMA_MAX_WQE; i++) {
+        for (i = 0; i < WQ_DEPTH; i++) {
             response = conn->response_buf + i;
             if(EnQueue(conn->freeList,response) == NULL) { //TODO error handler
                 printf("conn freeList has no more memory can be malloced\n");
@@ -192,7 +193,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
         PrintCallback(buffer);
     } else {//client
 
-        for (i = 0; i < RDMA_MAX_WQE; i++) {
+        for (i = 0; i < WQ_DEPTH; i++) {
             response = conn->response_buf + i;
             if (rdmaPostRecv(conn, response) == C_ERR) {
                 printf("responses: RDMA: post recv failed\n");
@@ -203,7 +204,7 @@ int rdmaSetupIoBuf(Connection *conn, struct ConnectionEvent *conn_ev, int connty
 
         }
         
-        for (i = 0; i < RDMA_MAX_WQE; i++) {
+        for (i = 0; i < WQ_DEPTH; i++) {
             header = conn->header_buf + i;
             if(EnQueue(conn->freeList,header) == NULL) { //TODO error handler
                 printf("conn freeList has no more memory can be malloced\n");
@@ -316,7 +317,7 @@ int UpdateConnection(Connection* conn) {
         goto error;
     }
     
-    cq = ibv_create_cq(conn->cm_id->verbs, RDMA_MAX_WQE * 2, NULL, conn->comp_channel, 0);//when -1, cq is null?
+    cq = ibv_create_cq(conn->cm_id->verbs, MIN_CQE_NUM, NULL, conn->comp_channel, 0);//when -1, cq is null?     RDMA_MAX_WQE * 2
     if (!cq) {
         //serverLog(LL_WARNING, "RDMA: ibv create cq failed");
         //TODO error handler
@@ -334,8 +335,8 @@ int UpdateConnection(Connection* conn) {
     conn->cFd = open_event_fd();
 
     memset(&init_attr, 0, sizeof(init_attr));
-    init_attr.cap.max_send_wr = RDMA_MAX_WQE;
-    init_attr.cap.max_recv_wr = RDMA_MAX_WQE;
+    init_attr.cap.max_send_wr = WQ_DEPTH;
+    init_attr.cap.max_recv_wr = WQ_DEPTH;
     init_attr.cap.max_send_sge = device_attr.max_sge;
     init_attr.cap.max_recv_sge = 1;
     init_attr.qp_type = IBV_QPT_RC;
@@ -351,7 +352,7 @@ int UpdateConnection(Connection* conn) {
     }
 
 
-    for (int i = 0; i < RDMA_MAX_WQE; i++) {
+    for (int i = 0; i < WQ_DEPTH; i++) {
         response = conn->response_buf + i;
         if (rdmaPostRecv(conn, response) == C_ERR) {//TODO error handler
             //serverLog(LL_WARNING, "RDMA: post recv failed");
@@ -363,7 +364,7 @@ int UpdateConnection(Connection* conn) {
 
     }
     
-    for (int i = 0; i < RDMA_MAX_WQE; i++) {
+    for (int i = 0; i < WQ_DEPTH; i++) {
         header = conn->header_buf + i;
         if(EnQueue(conn->freeList,header) == NULL) { //TODO error handler
             printf("no more memory can be malloced\n");
@@ -674,7 +675,7 @@ void* getDataBuffer(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//budd
             PrintCallback(buffer);
             return NULL;
         }
-        
+
         int index = buddy_alloc(rdmaPool->memoryPool->allocation,size / rdmaPoolConfig->memBlockSize);
         if(index == -1) {
             printf("get data buffer failed, no more data buffer can get\n");
@@ -689,6 +690,8 @@ void* getDataBuffer(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//budd
 
         *ret_size = s * rdmaPoolConfig->memBlockSize;
         void* send_buffer = rdmaPool->memoryPool->original_mem + index * rdmaPoolConfig->memBlockSize;  //TODO BLOCK_SIZE
+        sprintf(buffer,"getDataBuffer: buff(%d)\n",send_buffer);
+        PrintCallback(buffer);
         return send_buffer;
     }
 }
@@ -822,9 +825,21 @@ void* getHeaderBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size) {
 }
 
 void setConnContext(Connection* conn, void* connContext) {
+    sprintf(buffer,"setConnContext: conn %d\n",conn);
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: connContext %d\n",connContext);
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: connState %d\n",conn->state);
+    PrintCallback(buffer);
     pthread_spin_lock(&conn->lock);
     conn->connContext = connContext;
     conn->state = CONN_STATE_CONNECTED;
+    sprintf(buffer,"setConnContext: 111\n");
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: conn->comp_channel %d\n",conn->comp_channel);
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: conn->comp_channel->fd %d\n",conn->comp_channel->fd);
+    PrintCallback(buffer);
     EpollAddSendAndRecvEvent(conn->comp_channel->fd, conn);
     pthread_spin_unlock(&conn->lock);
     return;
@@ -854,8 +869,9 @@ void setRecvTimeoutUs(Connection* conn, int64_t timeout_us) {
 
 int releaseDataBuffer(void* buff) {
     //TODO rdmaPool is closed?
-    int index = (int)((buff - (rdmaPool->memoryPool->original_mem)) / rdmaPoolConfig->memBlockSize);
-    
+    sprintf(buffer,"releaseDataBuffer: buff(%d)\n",buff);
+    PrintCallback(buffer);
+    int index = (int)((buff - (rdmaPool->memoryPool->original_mem)) / (rdmaPoolConfig->memBlockSize));
     buddy_free(rdmaPool->memoryPool->allocation, index);
     buddy_dump(rdmaPool->memoryPool->allocation);
     return C_OK;
@@ -1026,9 +1042,9 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
             pthread_spin_unlock(&conn->lock);
             return C_ERR;
         }
-        index = buddy_alloc(conn->pool->allocation,remote_length / rdmaPoolConfig->memBlockSize);
+        index = buddy_alloc(conn->pool->allocation,remote_length / (rdmaPoolConfig->memBlockSize));
         if(index == -1) {
-            printf("rdmaMeta length:%d\n",remote_length/rdmaPoolConfig->memBlockSize);
+            printf("rdmaMeta length:%d\n",remote_length/(rdmaPoolConfig->memBlockSize));
             printf("conn(%p) rdma read failed, there is no space to read\n", conn);
             sprintf(buffer,"conn(%p) rdma read failed, there is no space to read\n", conn);
             PrintCallback(buffer);
@@ -1039,7 +1055,7 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
         buddy_dump(conn->pool->allocation);
         int s = buddy_size(conn->pool->allocation,index);
         printf("index %d (sz = %d)\n",index,s);
-        assert(s >= (remote_length / rdmaPoolConfig->memBlockSize));
+        assert(s >= (remote_length / (rdmaPoolConfig->memBlockSize)));
         
         pthread_spin_unlock(&conn->lock);        
         break;

@@ -11,6 +11,8 @@
   "rdmaHeaderPoolLevel": "15",
   "rdmaResponseBlockNum": "32768",
   "rdmaResponsePoolLevel": "15",
+  "wqDepth": "32",
+  "minCqeNum": "1024",
   "logDir": "_dir_/client/log",
   "logLevel": "debug"
 }

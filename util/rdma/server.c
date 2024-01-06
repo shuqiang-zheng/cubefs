@@ -13,6 +13,8 @@ int OnServerConnPreConnect(struct rdma_cm_id *id, void* ctx) {//TODO maybe need 
     Connection* conn = AllocConnection(id, conn_ev, 1);
 
     if(conn == NULL) {//TODO error handler
+        sprintf(buffer,"server=%p, there is no space to alloc conn\n", server);
+        PrintCallback(buffer);
         return C_ERR;
     }
 
@@ -70,6 +72,8 @@ int OnServerConnDisconnected(struct rdma_cm_id *id, void* ctx) { //TODO just con
     sprintf(buffer,"server=%p, on %s \n", server, __FUNCTION__);
     PrintCallback(buffer);
     Connection* conn = (Connection*)id->context;
+    sprintf(buffer,"conn=%d disconnected\n", conn);
+    PrintCallback(buffer);
     pthread_spin_lock(&conn->lock);
     conn->state = CONN_STATE_CLOSED;
     pthread_spin_unlock(&conn->lock);

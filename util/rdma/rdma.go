@@ -339,6 +339,7 @@ func (conn *Connection) RemoteAddr() net.Addr {
 
 func (conn *Connection) init(cConn *C.Connection) {
 	//atomic.StoreInt32(&conn.state, CONN_ST_CONNECTED)
+	//TODO accept和setConnContext之间发生了disconnect
 	conn.cConn = unsafe.Pointer(cConn)
 	conn.rFd = C.open_event_fd()
 	conn.wFd = C.open_event_fd()
@@ -826,7 +827,8 @@ type RdmaPoolConfig struct {
 	ResponseBlockNum  int
 	ResponsePoolLevel int
 
-	RdmaMaxWQE int
+	WqDepth   int
+	MinCqeNum int
 }
 
 func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) error {
@@ -857,8 +859,11 @@ func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) er
 	if gCfg.ResponsePoolLevel != 0 {
 		cCfg.responsePoolLevel = C.int(gCfg.ResponsePoolLevel)
 	}
-	if gCfg.RdmaMaxWQE != 0 {
-		cCfg.rdmaMaxWQE = C.int(gCfg.RdmaMaxWQE)
+	if gCfg.WqDepth != 0 {
+		cCfg.wqDepth = C.int(gCfg.WqDepth)
+	}
+	if gCfg.MinCqeNum != 0 {
+		cCfg.minCqeNum = C.int(gCfg.MinCqeNum)
 	}
 
 	return nil
