@@ -79,6 +79,7 @@ int transport_sendAndRecv_event_cb(void *ctx) {
     struct ibv_cq *ev_cq = NULL;
     void *ev_ctx = NULL;
     struct ibv_wc wc = {0};
+    //struct ibv_wc wcs[32];
     void *block;
     MemoryEntry *entry;
     int ret;
@@ -104,7 +105,101 @@ int transport_sendAndRecv_event_cb(void *ctx) {
     }
 
     int i = 0;
-    
+    /*
+    int ne = 0;
+    do {
+        ne = ibv_poll_cq(conn->cq, 32, wcs);
+        if (ne < 0) {
+            //TODO error handler
+            printf("RDMA: poll recv CQ error");
+            goto error;
+        } else if (ne == 0) {
+            printf("poll event ret:%d\n",ret);
+            sprintf(buffer,"poll event ret:%d\n",ret);
+            PrintCallback(buffer);
+            goto ok;
+            //continue;
+        }
+        for (int i = 0; i < ne; ++i) {
+            if (wcs[i].status != IBV_WC_SUCCESS) {
+        	    //serverLog(LL_WARNING, "RDMA: CQ handle error status: %s[0x%x], opcode : 0x%x", ibv_wc_status_str(wc.status), wc.status, wc.opcode);
+        	    //TODO error handler
+        	    printf("RDMA: CQ handler error status: %s[0x%x], opcpde: 0x%x\n", ibv_wc_status_str(wcs[i].status), wcs[i].status, wcs[i].opcode);
+        	    sprintf(buffer,"RDMA: CQ handler error status: %s[0x%x], opcpde: 0x%x\n", ibv_wc_status_str(wcs[i].status), wcs[i].status, wcs[i].opcode);
+                PrintCallback(buffer);
+        	    //return C_ERR;
+                goto error;
+            }
+            printf("RDMA: CQ handler success status: %s[0x%x], opcpde: 0x%x\n", ibv_wc_status_str(wcs[i].status), wcs[i].status, wcs[i].opcode);
+            sprintf(buffer,"RDMA: CQ handler success status: %s[0x%x], opcpde: 0x%x\n", ibv_wc_status_str(wcs[i].status), wcs[i].status, wcs[i].opcode);
+            PrintCallback(buffer);
+            switch (wcs[i].opcode) {
+            case IBV_WC_RECV:
+                printf("ibv_wc_recv\n");
+                sprintf(buffer,"ibv_wc_recv\n");
+                PrintCallback(buffer);
+                block = wcs[i].wr_id;
+                if (connRdmaHandleRecv(conn, block, wcs[i].byte_len) == C_ERR) {//, now
+                    printf("rdma recv failed");
+                    sprintf(buffer,"rdma recv failed");
+                    PrintCallback(buffer);
+                    goto error;
+                }
+                break;
+
+            case IBV_WC_RECV_RDMA_WITH_IMM:
+                printf("ibv_wc_recv_with_imm\n");
+                sprintf(buffer,"ibv_wc_recv_with_imm\n");
+                PrintCallback(buffer);
+
+                break;
+            case IBV_WC_RDMA_READ:
+                printf("ibv_wc_rdma_read\n");
+                sprintf(buffer,"ibv_wc_rdma_read\n");
+                PrintCallback(buffer);
+                entry = (MemoryEntry *)wcs[i].wr_id;
+                if (connRdmaHandleRead(conn, entry, wcs[i].byte_len) == C_ERR) {//, now
+                    //TODO error handler
+                    printf("rdma read failed");
+                    sprintf(buffer,"rdma read failed");
+                    PrintCallback(buffer);
+                    goto error;
+                }
+                break;
+
+            case IBV_WC_RDMA_WRITE:
+                printf("ibv_wc_rdma_write\n");
+                sprintf(buffer,"ibv_wc_rdma_write\n");
+                PrintCallback(buffer);
+
+                break;
+
+            case IBV_WC_SEND:
+                printf("ibv_wc_send\n");
+                sprintf(buffer,"ibv_wc_send\n");
+                PrintCallback(buffer);
+                if (connRdmaHandleSend(conn) == C_ERR) {  //,msg
+                    //TODO error handler
+                    printf("rdma send failed");
+                    sprintf(buffer,"rdma send failed");
+                    PrintCallback(buffer);
+                    goto error;
+                }
+
+                break;
+
+            default:
+                //serverLog(LL_WARNING, "RDMA: unexpected opcode 0x[%x]", wc.opcode);
+                //TODO error handler
+                printf("RDMA: unexpected opcode 0x[%x]\n", wcs[i].opcode);
+                sprintf(buffer,"RDMA: unexpected opcode 0x[%x]\n", wcs[i].opcode);
+                PrintCallback(buffer);
+                //return C_ERR;
+                goto error;
+            }
+        }
+    } while (ne);
+*/
 pollcq:
     i++;
     printf("enter %d\n",i);
@@ -127,6 +222,7 @@ pollcq:
         PrintCallback(buffer);
 
         goto ok;
+        //goto pollcq;
     }
     printf("cq num:%d\n",ret);
     sprintf(buffer,"cq num:%d\n",ret);
@@ -210,6 +306,7 @@ pollcq:
     }
     
     goto pollcq;
+
 error:
     wait_group_done(&(conn->wg));
     DisConnect(conn,true);

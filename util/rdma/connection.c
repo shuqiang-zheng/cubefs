@@ -832,6 +832,12 @@ void setConnContext(Connection* conn, void* connContext) {
     pthread_spin_lock(&conn->lock);
     conn->connContext = connContext;
     conn->state = CONN_STATE_CONNECTED;
+    sprintf(buffer,"setConnContext: 111\n");
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: conn->comp_channel %d\n",conn->comp_channel);
+    PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: conn->comp_channel->fd %d\n",conn->comp_channel->fd);
+    PrintCallback(buffer);
     EpollAddSendAndRecvEvent(conn->comp_channel->fd, conn);
     pthread_spin_unlock(&conn->lock);
     return;
