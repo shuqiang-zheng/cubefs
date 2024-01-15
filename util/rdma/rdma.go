@@ -339,6 +339,7 @@ func (conn *Connection) RemoteAddr() net.Addr {
 
 func (conn *Connection) init(cConn *C.Connection) {
 	//atomic.StoreInt32(&conn.state, CONN_ST_CONNECTED)
+	//TODO accept和setConnContext之间发生了disconnect
 	conn.cConn = unsafe.Pointer(cConn)
 	conn.rFd = C.open_event_fd()
 	conn.wFd = C.open_event_fd()

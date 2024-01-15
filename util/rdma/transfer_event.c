@@ -78,8 +78,8 @@ int transport_sendAndRecv_event_cb(void *ctx) {
     struct rdma_cm_id* cm_id = conn->cm_id;
     struct ibv_cq *ev_cq = NULL;
     void *ev_ctx = NULL;
-    struct ibv_wc wc = {0};
-    //struct ibv_wc wcs[32];
+    //struct ibv_wc wc = {0};
+    struct ibv_wc wcs[32];
     void *block;
     MemoryEntry *entry;
     int ret;
@@ -104,8 +104,8 @@ int transport_sendAndRecv_event_cb(void *ctx) {
         goto error;
     }
 
-    int i = 0;
-    /*
+    //int i = 0;
+
     int ne = 0;
     do {
         ne = ibv_poll_cq(conn->cq, 32, wcs);
@@ -114,8 +114,8 @@ int transport_sendAndRecv_event_cb(void *ctx) {
             printf("RDMA: poll recv CQ error");
             goto error;
         } else if (ne == 0) {
-            printf("poll event ret:%d\n",ret);
-            sprintf(buffer,"poll event ret:%d\n",ret);
+            printf("poll event ret:%d\n",ne);
+            sprintf(buffer,"poll event ret:%d\n",ne);
             PrintCallback(buffer);
             goto ok;
             //continue;
@@ -198,8 +198,8 @@ int transport_sendAndRecv_event_cb(void *ctx) {
                 goto error;
             }
         }
-    } while (ne);
-*/
+    } while (ne);//ne
+/*
 pollcq:
     i++;
     printf("enter %d\n",i);
@@ -306,7 +306,7 @@ pollcq:
     }
     
     goto pollcq;
-
+*/
 error:
     wait_group_done(&(conn->wg));
     DisConnect(conn,true);

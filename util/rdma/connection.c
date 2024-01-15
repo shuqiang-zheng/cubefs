@@ -829,6 +829,8 @@ void setConnContext(Connection* conn, void* connContext) {
     PrintCallback(buffer);
     sprintf(buffer,"setConnContext: connContext %d\n",connContext);
     PrintCallback(buffer);
+    sprintf(buffer,"setConnContext: connState %d\n",conn->state);
+    PrintCallback(buffer);
     pthread_spin_lock(&conn->lock);
     conn->connContext = connContext;
     conn->state = CONN_STATE_CONNECTED;
