@@ -85,7 +85,10 @@ func (e *EPoll) epollLoop() error {
 			//println(n)
 			print("event.Fd")
 			println(int(events[i].Fd))
-			e.getContext(int(events[i].Fd))()
+			//e.getContext(int(events[i].Fd))()
+			if eventFunction := e.getContext(int(events[i].Fd)); eventFunction != nil {
+				eventFunction()
+			}
 			//go e.getContext(int(events[i].Fd))()
 		}
 	}

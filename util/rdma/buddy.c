@@ -78,8 +78,11 @@ buddy_alloc(struct buddy * self , int s) {
 	}
 	int length = 1 << self->level;
 
-	if (size > length)
-		return -1;
+	if (size > length) {
+	    pthread_mutex_unlock(&self->mutex);
+	    return -1;
+	}
+
 
 	int index = 0;
 	int level = 0;
@@ -118,8 +121,11 @@ buddy_alloc(struct buddy * self , int s) {
 			level--;
 			length *= 2;
 			index = (index+1)/2 -1;
-			if (index < 0)
-				return -1;
+			if (index < 0) {
+			    pthread_mutex_unlock(&self->mutex);
+			    return -1;
+			}
+
 			if (index & 1) {
 				++index;
 				break;
