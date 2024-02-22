@@ -66,7 +66,7 @@ const (
 	DefaultRaftDir             = "raft"
 	DefaultRaftLogsToRetain    = 10 // Count of raft logs per data partition
 	DefaultDiskMaxErr          = 1
-	DefaultDiskRetainMin       = 1 * util.GB // GB
+	DefaultDiskRetainMin       = 0 * util.GB // GB
 	DefaultNameResolveInterval = 1           // minutes
 )
 
