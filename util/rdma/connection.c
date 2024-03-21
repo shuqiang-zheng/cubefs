@@ -614,7 +614,8 @@ MemoryEntry* getRecvResponseBuffer(Connection *conn) {
 void setConnContext(Connection* conn, void* connContext) {
     conn->connContext = connContext;
     conn->state = CONN_STATE_CONNECTED;
-    epoll_rdma_transferEvent_add(conn->comp_channel->fd, conn, transport_sendAndRecv_event_cb);
+    //epoll_rdma_transferEvent_add(conn->comp_channel->fd, conn, transport_sendAndRecv_event_cb);
+    rdma_transferEvent_thread(conn, conn->comp_channel->fd, cq_thread);
     return;
 }
 
