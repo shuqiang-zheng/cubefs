@@ -438,7 +438,7 @@ error:
     return C_ERR;
 }
 
-void* getDataBuffer(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//buddy alloc add lock?
+void* AllocateOneDataBuffer(uint32_t size, int64_t *ret_size) {//buddy alloc add lock?
     int i, j, k;
     int num = size / rdmaPool->memoryPool->block_size;
     if (size % rdmaPool->memoryPool->block_size != 0) {
@@ -485,6 +485,25 @@ void* getDataBuffer(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//budd
     pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
     *ret_size = 0;
     return NULL;
+}
+
+void* getDataBuffer(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//buddy alloc add lock?
+    void *ret = NULL;
+    int64_t wait_time = 0;
+
+    do {
+        ret = AllocateOneDataBuffer(size, ret_size);
+        if (ret != NULL) {
+            return ret;
+        }
+
+        wait_time += 1000;
+        if (timeout_us > 0 && wait_time > timeout_us) {
+            *ret_size = 0;
+            return NULL;
+        }
+        usleep(1000);
+    } while(1);
 }
 
 void* getResponseBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size) {
@@ -719,7 +738,7 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
         return C_ERR;
     }
 
-    addr = getDataBuffer(remote_length, 0, &ret_size);
+    addr = getDataBuffer(remote_length, 2000000, &ret_size);
     if (addr == NULL || ret_size < remote_length) {
         return C_ERR;
     }

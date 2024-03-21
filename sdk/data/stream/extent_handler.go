@@ -16,11 +16,12 @@ package stream
 
 import (
 	"fmt"
-	"github.com/cubefs/cubefs/util/rdma"
-	"github.com/cubefs/cubefs/util/stat"
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/cubefs/cubefs/util/rdma"
+	"github.com/cubefs/cubefs/util/stat"
 
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/sdk/data/wrapper"
@@ -174,6 +175,11 @@ func (eh *ExtentHandler) write(data []byte, offset, size int, direct bool) (ek *
 				eh.packet.Opcode = proto.OpSyncWrite
 			}
 			//log.LogDebugf("ExtentHandler Write: NewPacket, eh(%v) packet(%v)", eh, eh.packet)
+		}
+		if eh.packet.Data == nil {
+			log.LogErrorf("The data buffer is run out.")
+			err = errors.New("exhaust the data buffer")
+			return
 		}
 		packsize := int(eh.packet.Size)
 		write = util.Min(size-total, blksize-packsize)
