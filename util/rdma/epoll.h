@@ -17,7 +17,8 @@ static int set_noblock(int fd) {
     return fcntl(fd,F_SETFL,fl|O_NONBLOCK);
 }
 
-typedef void (*EventCallBack)(void *ctx);
+typedef void *(*EventCallBack)(void *ctx);
+
 struct EpollEvent {
     uint32_t index;
     EventCallBack cb;
@@ -116,7 +117,7 @@ static int rdma_transferEvent_thread(Connection *conn, int fd, EventCallBack cb)
     ev->fd = fd;
     pthread_create(&all_threads[ev->index], NULL, cb, conn);
 }
-
+/*
 static int epoll_rdma_transferEvent_add(int fd, void* ctx, EventCallBack cb) {
     int epoll_fd = get_epoll_fd();
     if(epoll_fd < 0){
@@ -140,7 +141,7 @@ static int epoll_rdma_transferEvent_add(int fd, void* ctx, EventCallBack cb) {
 
     return 0;
 }
-
+*/
 static int epoll_rdma_connectEvent_add(int fd, void* ctx, EventCallBack cb) {
     int epoll_fd = get_epoll_fd();
     if(epoll_fd < 0){

@@ -14,7 +14,6 @@
 #define RDMA_INVALID_OPCODE 0xffff
 
 //#define RDMA_MAX_WQE 1024
-#define SERVER_MAX_CONN 10
 #define SERVER_MAX_CONN 32
 
 static const int TIMEOUT_IN_MS = 500;
@@ -138,7 +137,7 @@ typedef struct Connection {
     int64_t recv_timeout_ns;
 } Connection;
 
-typedef struct RdmaContext {
+struct RdmaContext {
     Connection *conn;
     struct rdma_cm_id *listen_id;
     struct rdma_event_channel *ec;
@@ -150,7 +149,7 @@ typedef struct RdmaContext {
     bool isReConnect;
 };
 
-typedef struct RdmaListener {
+struct RdmaListener {
     struct hashmap *allConns;
     Queue *waitConns;
     pthread_mutex_t mutex;
