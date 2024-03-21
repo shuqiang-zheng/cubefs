@@ -439,37 +439,52 @@ error:
 }
 
 void* getDataBuffer(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//buddy alloc add lock?
-    *ret_size = 0;
-    int64_t dead_line = 0;
-    int64_t now = get_time_ns();
-    if(timeout_us <= 0) {
-        dead_line = -1;
-    } else {
-        dead_line = now+timeout_us*1000;
+    int i, j, k;
+    int num = size / rdmaPool->memoryPool->block_size;
+    if (size % rdmaPool->memoryPool->block_size != 0) {
+        num++;
     }
-    while(1) {
-        now = get_time_ns();
-        if(dead_line == -1) {
-            //printf("get data buffer timeout, deadline:%ld, now:%ld\n", dead_line, now);
-            return NULL;
-        }
-        if(now >= dead_line) {
-            //printf("get data buffer timeout, deadline:%ld, now:%ld\n", dead_line, now);
-            return NULL;
-        }
 
-        int index = buddy_alloc(rdmaPool->memoryPool->allocation,size / rdmaPoolConfig->memBlockSize);
-        if(index == -1) {
-            //printf("get data buffer failed, no more data buffer can get\n");
-            continue;
+    pthread_mutex_lock(&(rdmaPool->memoryPool->lock));
+    for (i=rdmaPool->memoryPool->current_index; i < rdmaPool->memoryPool->block_num;) {
+        k = 0;
+        for (j=i; j <rdmaPool->memoryPool->block_num && k < num; j++, k++) {
+            if (rdmaPool->memoryPool->used[j]) {
+                break;
+            }
         }
-        //buddy_dump(rdmaPool->memoryPool->allocation);
-        int s = buddy_size(rdmaPool->memoryPool->allocation,index);
-        assert(s >= (size / rdmaPoolConfig->memBlockSize));
-        *ret_size = s * rdmaPoolConfig->memBlockSize;
-        void* send_buffer = rdmaPool->memoryPool->original_mem + index * rdmaPoolConfig->memBlockSize;
-        return send_buffer;
+        if (k == num) {
+            for (j=i; j < i+num; j++) {
+                rdmaPool->memoryPool->used[j] = true;
+            }
+            rdmaPool->memoryPool->current_index = (i+num) % rdmaPool->memoryPool->block_num;
+            pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
+            *ret_size = num * rdmaPool->memoryPool->block_size;
+            return (void*)(rdmaPool->memoryPool->original_mem + i * rdmaPool->memoryPool->block_size);
+        }
+        i = j+1;
     }
+    for (i=0; i<rdmaPool->memoryPool->current_index;) {
+        k = 0;
+        for (j=i; j <rdmaPool->memoryPool->block_num && k < num; j++, k++) {
+            if (rdmaPool->memoryPool->used[j]) {
+                break;
+            }
+        }
+        if (k == num) {
+            for (j=i; j < i+num; j++) {
+                rdmaPool->memoryPool->used[j] = true;
+            }
+            rdmaPool->memoryPool->current_index = (i+num) % rdmaPool->memoryPool->block_num;
+            pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
+            *ret_size = num * rdmaPool->memoryPool->block_size;
+            return (void*)(rdmaPool->memoryPool->original_mem + i * rdmaPool->memoryPool->block_size);
+        }
+        i = j+1;
+    }
+    pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
+    *ret_size = 0;
+    return NULL;
 }
 
 void* getResponseBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size) {
@@ -602,10 +617,20 @@ void setRecvTimeoutUs(Connection* conn, int64_t timeout_us) {
     return;
 }
 
-int releaseDataBuffer(void* buff) {
-    int index = (int)((buff - (rdmaPool->memoryPool->original_mem)) / (rdmaPoolConfig->memBlockSize));
-    buddy_free(rdmaPool->memoryPool->allocation, index);
-    //buddy_dump(rdmaPool->memoryPool->allocation);
+int releaseDataBuffer(void* buff, int size) {
+    int i;
+    int index = (int)((buff - rdmaPool->memoryPool->original_mem) / rdmaPool->memoryPool->block_size);
+    int num = size / rdmaPool->memoryPool->block_size;
+    if (size % rdmaPool->memoryPool->block_size != 0) {
+        num++;
+    }
+
+    pthread_mutex_lock(&(rdmaPool->memoryPool->lock));
+    for (i = index; i<index+num && i < rdmaPool->memoryPool->block_num; i++) {
+        rdmaPool->memoryPool->used[i] = false;
+    }
+    pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
+
     return C_OK;
 }
 
@@ -674,6 +699,8 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
     struct rdma_cm_id *cm_id = conn->cm_id;
     struct ibv_send_wr send_wr, *bad_wr;
     struct ibv_sge sge;
+    void* addr;
+    int64_t ret_size = 0;
 
     char* remote_addr = (char *)ntohu64(header->RdmaAddr);
     uint32_t remote_length = ntohl(header->RdmaLength);
@@ -686,31 +713,18 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
     } else {
         dead_line = now+conn->recv_timeout_ns; 
     }
-    while(1) {
-        if (conn->state != CONN_STATE_CONNECTED) { //在使用之前需要判断连接的状态
-            //printf("conn(%p) state error or conn closed: state(%d)\n",conn, conn->state);
-            return C_ERR;
-        }
-        now = get_time_ns();
-        if(dead_line == -1) {
-            //printf("conn(%p) rdma read timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
-            return C_ERR;
-        }
-        if(now >= dead_line) {
-            //printf("conn(%p) rdma read timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
-            return C_ERR;
-        }
-        index = buddy_alloc(conn->pool->allocation,remote_length / (rdmaPoolConfig->memBlockSize));
-        if(index == -1) {
-            //printf("conn(%p) rdma read failed, there is no space to read\n", conn);
-            continue;
-        }
-        //buddy_dump(conn->pool->allocation);
-        int s = buddy_size(conn->pool->allocation,index);
-        assert(s >= (remote_length / (rdmaPoolConfig->memBlockSize)));
-        break;
+
+    if (conn->state != CONN_STATE_CONNECTED) { //在使用之前需要判断连接的状态
+        //printf("conn(%p) state error or conn closed: state(%d)\n",conn, conn->state);
+        return C_ERR;
     }
-    void* addr = conn->pool->original_mem + index * rdmaPoolConfig->memBlockSize;
+
+    addr = getDataBuffer(remote_length, 0, &ret_size);
+    if (addr == NULL || ret_size < remote_length) {
+        return C_ERR;
+    }
+
+    //void* addr = conn->pool->original_mem + index * rdmaPoolConfig->memBlockSize;
     entry->data_buff = addr;
     entry->data_len = remote_length;
     entry->isResponse = false;

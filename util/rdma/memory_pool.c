@@ -44,14 +44,19 @@ void dereg_mr(struct ibv_mr* mr) {
     return;
 }
 
-MemoryPool* InitMemoryPool(int block_num, int block_size, int level) {
+MemoryPool* InitMemoryPool(int block_num, int block_size) {
     struct ibv_pd* pd = NULL;
     struct ibv_mr* mr = NULL;
 
     MemoryPool * pool = (MemoryPool*)malloc(sizeof(MemoryPool));
     pool->size = (int64_t)block_num * (int64_t)block_size;
     posix_memalign((void**)(&(pool->original_mem)), sysconf(_SC_PAGESIZE), pool->size);
-    pool->allocation = buddy_new(level);
+    pool->used = malloc(block_num * sizeof(int8_t));
+    memset(pool->used, 0, block_num * sizeof(int8_t));
+    pool->block_num = block_num;
+    pool->block_size = block_size;
+    pool->current_index = 0;
+    pthread_mutex_init(&(pool->lock), 0);
     pd = alloc_pd();
     if(!pd) {
         return NULL;
@@ -69,7 +74,8 @@ void CloseMemoryPool(MemoryPool* pool) {
     dealloc_pd(pool->pd);
     dereg_mr(pool->mr);
     free(pool->original_mem);
-    buddy_delete(pool->allocation);
+    free(pool->used);
+    pthread_mutex_destroy(&(pool->lock));
     free(pool);
 }
 

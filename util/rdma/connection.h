@@ -71,7 +71,7 @@ void setSendTimeoutUs(Connection* conn, int64_t timeout_us);
 
 void setRecvTimeoutUs(Connection* conn, int64_t timeout_us);
 
-int releaseDataBuffer(void* buff);
+int releaseDataBuffer(void* buff, int size);
 
 int releaseResponseBuffer(Connection* conn, void* buff);
 

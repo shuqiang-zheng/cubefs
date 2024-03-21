@@ -342,7 +342,7 @@ func GetDataBuffer(len uint32, timeout_us int) ([]byte, error) {
 }
 
 func ReleaseDataBuffer(dataBuffer []byte) error {
-	if int(C.releaseDataBuffer(unsafe.Pointer(&dataBuffer[0]))) == 0 {
+	if int(C.releaseDataBuffer(unsafe.Pointer(&dataBuffer[0]), C.int32_t(len(dataBuffer)))) == 0 {
 		return fmt.Errorf("release data buffer(%p) failed", dataBuffer)
 	}
 	return nil

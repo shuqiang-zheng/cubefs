@@ -16,16 +16,19 @@ package util
 
 import "C"
 import (
-	"github.com/cubefs/cubefs/util/log"
-	"github.com/cubefs/cubefs/util/rdma"
+	"container/list"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cubefs/cubefs/util/log"
+	"github.com/cubefs/cubefs/util/rdma"
 )
 
 type RdmaClientObject struct {
 	client *rdma.Client // client conn
 	conn   *rdma.Connection
+	Addr   string
 	idle   int64
 }
 
@@ -37,8 +40,6 @@ const (
 var (
 	RdmaEnvInit = false
 	Config      = &rdma.RdmaPoolConfig{}
-	//RdmaConnPool = NewRdmaConnectPool()
-	//StreamRdmaConnPool = NewRdmaConnectPool()
 )
 
 func InitRdmaEnv() {
@@ -61,6 +62,7 @@ type RdmaConnectPool struct {
 	connectTimeout int64
 	closeCh        chan struct{}
 	closeOnce      sync.Once
+	NetLinks       list.List
 }
 
 func NewRdmaConnectPool() (rcp *RdmaConnectPool) {
@@ -72,6 +74,7 @@ func NewRdmaConnectPool() (rcp *RdmaConnectPool) {
 		timeout:        int64(time.Second * RdmaConnectIdleTime),
 		connectTimeout: defaultRdmaConnectTimeout,
 		closeCh:        make(chan struct{}),
+		NetLinks:       *list.New(),
 	}
 	//go rcp.autoRelease()
 
@@ -87,6 +90,7 @@ func NewRdmaConnectPoolWithTimeout(idleConnTimeout time.Duration, connectTimeout
 		timeout:        int64(idleConnTimeout * time.Second),
 		connectTimeout: connectTimeout,
 		closeCh:        make(chan struct{}),
+		NetLinks:       *list.New(),
 	}
 	//go rcp.autoRelease()
 
@@ -94,60 +98,61 @@ func NewRdmaConnectPoolWithTimeout(idleConnTimeout time.Duration, connectTimeout
 }
 
 func (rcp *RdmaConnectPool) GetRdmaConn(targetAddr string) (conn *rdma.Connection, err error) {
-	rcp.RLock()
-	pool, ok := rcp.clientPools[targetAddr]
-	rcp.RUnlock()
-	if !ok {
-		newPool := NewClientPool(rcp.mincap, rcp.maxcap, rcp.timeout, rcp.connectTimeout, targetAddr)
-		rcp.Lock()
-		pool, ok = rcp.clientPools[targetAddr]
-		if !ok {
-			//pool = NewPool(cp.mincap, cp.maxcap, cp.timeout, cp.connectTimeout, targetAddr)
-			pool = newPool
-			rcp.clientPools[targetAddr] = pool
+	rcp.Lock()
+	defer rcp.Unlock()
+
+	for item := rcp.NetLinks.Front(); item != nil; item = item.Next() {
+		if item.Value == nil {
+			continue
 		}
-		rcp.Unlock()
+		obj, ok := item.Value.(*RdmaClientObject)
+		if !ok {
+			continue
+		}
+		if obj.Addr == targetAddr {
+			conn = obj.conn
+			rcp.NetLinks.Remove(item)
+			return conn, nil
+		}
 	}
 
-	return pool.GetRdmaConnFromPool()
+	str := strings.Split(targetAddr, ":")
+	targetIp := str[0]
+	targetPort := str[1]
+	client, err := rdma.NewRdmaClient(targetIp, targetPort) //TODO
+	if err != nil {
+		return nil, err
+	}
+	conn = client.Dial()
+
+	return conn, nil
 }
 
 func (rcp *RdmaConnectPool) PutRdmaConn(conn *rdma.Connection, forceClose bool) {
 	if conn == nil {
 		return
 	}
-	/*	if forceClose {
-			_ = c.Close()
-			return
-		}
-		select {
-		case <-cp.closeCh:
-			_ = c.Close()
-			return
-		default:
-		}*/
-	//addr := client.remoteIp + ":" + client.remotePort
+
 	client, _ := (conn.Ctx).(*rdma.Client)
+	addr := client.RemoteIp + ":" + client.RemotePort
+
 	if forceClose {
 		conn.Close()
 		client.Close()
 		return
 	}
-	addr := client.RemoteIp + ":" + client.RemotePort
-	rcp.RLock()
-	pool, ok := rcp.clientPools[addr]
-	rcp.RUnlock()
-	if !ok {
-		//c.Close()
-		//*Client(conn.ctx).Close()
-		conn.Close()
-		client.Close()
-		return
-	}
 
-	//object := &RdmaClientObject{client: client, idle: time.Now().UnixNano()}
-	//pool.PutRdmaClientObjectToPool(object)
-	pool.PutRdmaConnToPool(conn)
+	rcp.Lock()
+	defer rcp.Unlock()
+
+	obj := &RdmaClientObject{
+		client: client,
+		conn:   conn,
+		Addr:   addr,
+	}
+	rcp.NetLinks.PushFront(obj)
+
+	return
 }
 
 type ClientPool struct {
