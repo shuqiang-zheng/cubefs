@@ -528,13 +528,13 @@ void* getResponseBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size)
         }
         now = get_time_ns();
         if(dead_line == -1) {
-            //printf("conn(%p) get response buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
-            DisConnect(conn,true);
+            printf("conn(%p) get response buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
+            DisConnect(conn, false);
             return NULL;
         }
         if(now >= dead_line) {
-            //printf("conn(%p) get response buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
-            DisConnect(conn,true);
+            printf("conn(%p) get response buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
+            DisConnect(conn, false);
             return NULL;
         }
         if(DeQueue(conn->freeList,&(response)) == NULL) {
@@ -569,13 +569,13 @@ void* getHeaderBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size) {
         }
         now = get_time_ns();
         if(dead_line == -1) {
-            //printf("conn(%p) get header buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
-            DisConnect(conn,true);
+            printf("conn(%p) get header buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
+            DisConnect(conn, false);
             return NULL;
         }
         if(now >= dead_line) {
-            //printf("conn(%p) get header buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
-            DisConnect(conn,true);
+            printf("conn(%p) get header buffer timeout, deadline:%ld, now:%ld\n", conn, dead_line, now);
+            DisConnect(conn, false);
             return NULL;
         }
 

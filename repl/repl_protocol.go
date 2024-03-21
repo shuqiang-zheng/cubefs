@@ -17,9 +17,10 @@ package repl
 import (
 	"container/list"
 	"fmt"
-	"github.com/cubefs/cubefs/util/rdma"
 	"net"
 	"sync"
+
+	"github.com/cubefs/cubefs/util/rdma"
 
 	"sync/atomic"
 	"time"
@@ -175,6 +176,7 @@ func (ft *FollowerTransport) readFollowerResult(request *FollowerPacket) (err er
 	if conn, ok := ft.conn.(*rdma.Connection); ok {
 		if reply.RecvRespFromRDMAConn(conn, timeOut); err != nil {
 			log.LogErrorf("readFollowerResult ft.addr(%v), err(%v)", ft.addr, err.Error())
+			RdmaConnPool.PutRdmaConn(conn, true)
 			return
 		}
 	} else {
@@ -474,6 +476,7 @@ func (rp *ReplProtocol) writeResponse(reply *Packet) {
 				rp.sourceConn.RemoteAddr().String()), reply.StartT, err))
 			log.LogErrorf(err.Error())
 			rp.Stop()
+			RdmaConnPool.PutRdmaConn(conn, true)
 		}
 		log.LogDebugf("send resp to rdma conn: time[%v]", time.Now())
 	} else {

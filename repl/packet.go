@@ -16,12 +16,13 @@ package repl
 
 import (
 	"fmt"
-	"github.com/cubefs/cubefs/util/log"
-	"github.com/cubefs/cubefs/util/rdma"
 	"io"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/cubefs/cubefs/util/log"
+	"github.com/cubefs/cubefs/util/rdma"
 
 	"github.com/cubefs/cubefs/depends/tiglabs/raft"
 	"github.com/cubefs/cubefs/proto"
@@ -358,9 +359,11 @@ func (p *Packet) ReadFromConnFromCli(c net.Conn, deadlineTime time.Duration) (er
 		var offset int
 		//conn, _ := c.(*rdma.Connection)
 		if _, err = conn.Read(nil); err != nil {
+			RdmaConnPool.PutRdmaConn(conn, true)
 			return
 		}
 		if headerBuff, dataBuff, err = conn.GetRecvMsgBuffer(); err != nil {
+			RdmaConnPool.PutRdmaConn(conn, true)
 			return
 		}
 		defer func() {

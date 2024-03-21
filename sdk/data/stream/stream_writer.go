@@ -16,12 +16,13 @@ package stream
 
 import (
 	"fmt"
-	"github.com/cubefs/cubefs/util/rdma"
 	"hash/crc32"
 	"net"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/cubefs/cubefs/util/rdma"
 
 	"golang.org/x/net/context"
 
