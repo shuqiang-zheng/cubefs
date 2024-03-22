@@ -28,7 +28,7 @@ type RdmaClientObject struct {
 	client *rdma.Client // client conn
 	conn   *rdma.Connection
 	Addr   string
-	idle   int64
+	Idle   int64
 }
 
 const (
@@ -55,7 +55,7 @@ func InitRdmaEnv() {
 type RdmaConnectPool struct {
 	sync.RWMutex
 	connectTimeout int64
-	closeCh        chan struct{}
+	closeCh        chan bool
 	closeOnce      sync.Once
 	NetLinks       list.List
 }
@@ -64,10 +64,10 @@ func NewRdmaConnectPool() (rcp *RdmaConnectPool) {
 	InitRdmaEnv()
 	rcp = &RdmaConnectPool{
 		connectTimeout: defaultRdmaConnectTimeout,
-		closeCh:        make(chan struct{}),
+		closeCh:        make(chan bool),
 		NetLinks:       *list.New(),
 	}
-	//go rcp.autoRelease()
+	go rcp.autoRelease()
 
 	return rcp
 }
@@ -76,12 +76,65 @@ func NewRdmaConnectPoolWithTimeout(idleConnTimeout time.Duration, connectTimeout
 	InitRdmaEnv()
 	rcp = &RdmaConnectPool{
 		connectTimeout: connectTimeout,
-		closeCh:        make(chan struct{}),
+		closeCh:        make(chan bool),
 		NetLinks:       *list.New(),
 	}
-	//go rcp.autoRelease()
+	go rcp.autoRelease()
 
 	return rcp
+}
+
+func (rcp *RdmaConnectPool) Close() {
+	rcp.closeCh <- true
+
+	rcp.Lock()
+	defer rcp.Unlock()
+
+	for item := rcp.NetLinks.Front(); item != nil; item = item.Next() {
+		if item.Value == nil {
+			continue
+		}
+		obj, ok := item.Value.(*RdmaClientObject)
+		if !ok {
+			continue
+		}
+		obj.conn.Close()
+		obj.client.Close()
+	}
+}
+
+func (rcp *RdmaConnectPool) CleanTimeOutLink() {
+	rcp.Lock()
+	defer rcp.Unlock()
+
+	now := time.Now().Unix()
+
+	for item := rcp.NetLinks.Front(); item != nil; item = item.Next() {
+		if item.Value == nil {
+			continue
+		}
+		obj, ok := item.Value.(*RdmaClientObject)
+		if !ok {
+			continue
+		}
+		if (now - obj.Idle) > rcp.connectTimeout {
+			// It is ok to delete one time out item, and quit.
+			rcp.NetLinks.Remove(item)
+			return
+		}
+	}
+}
+
+func (rcp *RdmaConnectPool) autoRelease() {
+	t := time.NewTicker(defaultRdmaConnectTimeout * time.Second)
+	for {
+		select {
+		case <-t.C:
+			rcp.CleanTimeOutLink()
+		case <-rcp.closeCh:
+			return
+		}
+	}
 }
 
 func (rcp *RdmaConnectPool) GetRdmaConn(targetAddr string) (conn *rdma.Connection, err error) {
@@ -136,6 +189,7 @@ func (rcp *RdmaConnectPool) PutRdmaConn(conn *rdma.Connection, forceClose bool) 
 		client: client,
 		conn:   conn,
 		Addr:   addr,
+		Idle:   time.Now().Unix(),
 	}
 	rcp.NetLinks.PushFront(obj)
 
