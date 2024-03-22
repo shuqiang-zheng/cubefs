@@ -359,11 +359,9 @@ func (p *Packet) ReadFromConnFromCli(c net.Conn, deadlineTime time.Duration) (er
 		var offset int
 		//conn, _ := c.(*rdma.Connection)
 		if _, err = conn.Read(nil); err != nil {
-			RdmaConnPool.PutRdmaConn(conn, true)
 			return
 		}
 		if headerBuff, dataBuff, err = conn.GetRecvMsgBuffer(); err != nil {
-			RdmaConnPool.PutRdmaConn(conn, true)
 			return
 		}
 		defer func() {

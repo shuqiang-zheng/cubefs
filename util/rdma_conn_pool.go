@@ -56,7 +56,6 @@ type RdmaConnectPool struct {
 	sync.RWMutex
 	connectTimeout int64
 	closeCh        chan bool
-	closeOnce      sync.Once
 	NetLinks       list.List
 }
 
