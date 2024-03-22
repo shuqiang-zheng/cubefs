@@ -22,8 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cubefs/cubefs/util/rdma"
-
 	"golang.org/x/net/context"
 
 	"github.com/cubefs/cubefs/proto"
@@ -402,12 +400,7 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 		replyPacket := new(Packet)
 		err = sc.Send(&retry, reqPacket, func(conn net.Conn) (error, bool) {
 			var e error
-			if IsRdma {
-				c, _ := conn.(*rdma.Connection)
-				e = replyPacket.RecvRespFromRDMAConn(c, proto.ReadDeadlineTime)
-			} else {
-				e = replyPacket.ReadFromConn(conn, proto.ReadDeadlineTime)
-			}
+			e = replyPacket.ReadFromConn(conn, proto.ReadDeadlineTime)
 
 			if e != nil {
 				log.LogWarnf("Stream Writer doOverwrite: ino(%v) failed to read from connect, req(%v) err(%v)", s.inode, reqPacket, e)
@@ -423,13 +416,9 @@ func (s *Streamer) doOverwrite(req *ExtentRequest, direct bool) (total int, err 
 				e = TryOtherAddrError
 			}
 			return e, false
-		}, IsRdma)
+		}, false)
 
-		if IsRdma {
-			rdma.ReleaseDataBuffer(reqPacket.Data)
-		} else {
-			proto.Buffers.Put(reqPacket.Data)
-		}
+		proto.Buffers.Put(reqPacket.Data)
 
 		reqPacket.Data = nil
 		log.LogDebugf("doOverwrite: ino(%v) req(%v) reqPacket(%v) err(%v) replyPacket(%v)", s.inode, req, reqPacket, err, replyPacket)

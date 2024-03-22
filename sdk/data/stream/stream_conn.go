@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/sdk/data/wrapper"
 	"github.com/cubefs/cubefs/util"
 	"github.com/cubefs/cubefs/util/errors"
@@ -118,7 +119,7 @@ func (sc *StreamConn) Send(retry *bool, req *Packet, getReply GetReplyFunc, isRd
 	return errors.New(fmt.Sprintf("StreamConn Send: retried %v times and still failed, sc(%v) reqPacket(%v)", StreamSendMaxRetry, sc, req))
 }
 func (sc *StreamConn) sendToPartition(req *Packet, retry *bool, getReply GetReplyFunc, isRdma bool) (err error) {
-	if isRdma {
+	if isRdma && (req.Opcode == proto.OpWrite || req.Opcode == proto.OpSyncWrite) {
 		return sc.sendToPartitionByRDMA(req, retry, getReply)
 	} else {
 		return sc.sendToPartitionByTCP(req, retry, getReply)
