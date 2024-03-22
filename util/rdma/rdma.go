@@ -490,6 +490,7 @@ type RdmaPoolConfig struct {
 	ResponsePoolLevel int
 	WqDepth           int
 	MinCqeNum         int
+	EnableRdmaLog     bool
 }
 
 func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) error {
@@ -525,6 +526,9 @@ func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) er
 	}
 	if gCfg.MinCqeNum != 0 {
 		cCfg.minCqeNum = C.int(gCfg.MinCqeNum)
+	}
+	if gCfg.EnableRdmaLog {
+		cCfg.enableRdmaLog = C.int(1)
 	}
 	return nil
 }

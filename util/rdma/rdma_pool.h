@@ -2,6 +2,7 @@
 #define RDMA_POOL_H
 
 #include "rdma_proto.h"
+#include "log.h"
 
 #define C_OK 1
 #define C_ERR 0
@@ -25,6 +26,7 @@ struct RdmaPoolConfig {
 
     int wqDepth;
     int minCqeNum;
+    int enableRdmaLog;
 };
 
 extern struct RdmaPool *rdmaPool;

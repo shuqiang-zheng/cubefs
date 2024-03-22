@@ -290,6 +290,8 @@ func (s *DataNode) parseConfig(cfg *config.Config) (err error) {
 		util.Config.WqDepth = int(cfg.GetInt64WithDefault("wqDepth", 32))
 		util.Config.MinCqeNum = int(cfg.GetInt64WithDefault("minCqeNum", 1024))
 
+		util.Config.EnableRdmaLog = cfg.GetBoolWithDefault("enableRdmaLog", false)
+
 		stream.StreamRdmaConnPool = util.NewRdmaConnectPool()
 		repl.RdmaConnPool = util.NewRdmaConnectPool()
 	}

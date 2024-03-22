@@ -36,6 +36,7 @@ void destroy_connection(Connection *conn) {
     }
     if(conn->cm_id->qp) {
         if(ibv_destroy_qp(conn->cm_id->qp)) {
+            log_debug("Failed to destroy qp: %s\n", strerror(errno));
             //printf("Failed to destroy qp: %s\n", strerror(errno));
             // we continue anyways;
         }
@@ -43,6 +44,7 @@ void destroy_connection(Connection *conn) {
     if(conn->cq) {
         int ret = ibv_destroy_cq(conn->cq);
         if(ret) {
+            log_debug("Failed to destroy cq: %s\n", strerror(errno));
             //printf("Failed to destroy cq: %s\n", strerror(errno));
             // we continue anyways;
         }
@@ -51,6 +53,7 @@ void destroy_connection(Connection *conn) {
     if(conn->comp_channel) {
         int ret = ibv_destroy_comp_channel(conn->comp_channel);
         if(ret != 0) {
+            log_debug("Failed to destroy comp channel: %s\n", strerror(errno));
             //printf("Failed to destroy comp channel: %s\n", strerror(errno));
             // we continue anyways;
         }
@@ -69,18 +72,21 @@ int build_connection(struct ConnectionEvent *conn_ev, Connection *conn) {
     pd = rdmaPool->memoryPool->pd;
     cm_id->verbs = pd->context;
     if (ibv_query_device(cm_id->verbs, &device_attr)) {
+        log_debug("RDMA: ibv query device failed\n");
         //printf("RDMA: ibv query device failed\n");
         goto error;
     }
     conn->pd = pd;
     comp_channel = ibv_create_comp_channel(cm_id->verbs);
     if (!comp_channel) {
+        log_debug("RDMA: ibv create comp channel failed\n");
         //printf("RDMA: ibv create comp channel failed\n");
         goto error;
     }
     conn->comp_channel = comp_channel;
     cq = ibv_create_cq(cm_id->verbs, MIN_CQE_NUM, NULL, comp_channel, 0);//when -1, cq is null?     RDMA_MAX_WQE * 2
     if (!cq) {
+        log_debug("RDMA: ibv create cq failed: cq:%d\n",cq);
         //printf("RDMA: ibv create cq failed: cq:%d\n",cq);
         goto error;
     }
@@ -96,6 +102,7 @@ int build_connection(struct ConnectionEvent *conn_ev, Connection *conn) {
     init_attr.recv_cq = cq;
     ret = rdma_create_qp(cm_id, pd, &init_attr);
     if (ret) {
+        log_debug("RDMA: create qp failed: %d\n",ret);
         //printf("RDMA: create qp failed: %d\n",ret);
         goto error;
     }
@@ -120,40 +127,50 @@ void *connection_event_cb(void *ctx) {
   int event_type;
   int ret = rdma_get_cm_event(conn_ev->cm_id->channel, &event);
   if (ret < 0) {
+      log_debug("rdma_get_cm_event failed:（%d：%s）。\n",errno,strerror(errno));
       //printf("rdma_get_cm_event failed:（%d：%s）。\n",errno,strerror(errno));
       return NULL;
   }
   conn_id = event->id;
   event_type = event->event;
   if (rdma_ack_cm_event(event)) {
+      log_debug("ack cm event failed\n");
       //printf("ack cm event failed\n");
       return NULL;
   }
+  log_debug("RDMA: connection event handler success status: status: 0x%x\n", event->status);
   //printf("RDMA: connection event handler success status: status: 0x%x\n", event->status);
   if (!ret) {
       if (event_type == RDMA_CM_EVENT_ADDR_RESOLVED) { //client
+          log_debug("client: rdma_cm_event_addr_resolved\n");
           int v = conn_ev->preconnect_callback(conn_id, conn_ev); //创建connection
           if(!v) {
             rdma_disconnect(conn_id);
+            log_debug("client: rdma addr resolved failed, call rdma_disconnect\n");
             //printf("client: rdma addr resolved failed, call rdma_disconnect\n");
             return NULL;
           } else {
             rdma_resolve_route(conn_id, TIMEOUT_IN_MS);
+            log_debug("client: rdma addr resolved success\n");
             //printf("client: rdma addr resolved success\n");
             return NULL;
           }
       } else if (event_type == RDMA_CM_EVENT_ROUTE_RESOLVED) { //client
+          log_debug("client: rdma_cn_event_route_resolved\n");
           struct rdma_conn_param cm_params;
           build_params(&cm_params);
           if(rdma_connect(conn_id, &cm_params)) {
+              log_debug("client: rdma_route resolved failed, call rdma_disconnect\n");
               //printf("client: rdma_route resolved failed, call rdma_disconnect\n");
               rdma_disconnect(conn_id);
               return NULL;
           }
           return NULL;
       } else if (event_type == RDMA_CM_EVENT_CONNECT_REQUEST) { //server
+          log_debug("server: rdma_cm_event_connect_request\n");
           int v = conn_ev->preconnect_callback(conn_id, conn_ev);
           if(!v) {
+              log_debug("server: rdma_connect request failed, call rdma_reject\n");
               //printf("server: rdma_connect request failed, call rdma_reject\n");
               rdma_reject(conn_id, NULL, 0);
               rdma_destroy_id(conn_id);
@@ -163,6 +180,7 @@ void *connection_event_cb(void *ctx) {
               build_params(&cm_params);
               ret = rdma_accept(conn_id, &cm_params);
               if (ret) {
+                  log_debug("server: rdma_connect request failed, call rdma_reject\n");
                   //printf("server: rdma_connect request failed, call rdma_reject\n");
                   rdma_reject(conn_id, NULL, 0);
                   return NULL;
@@ -170,8 +188,10 @@ void *connection_event_cb(void *ctx) {
           }
           return NULL;
       } else if (event_type == RDMA_CM_EVENT_ESTABLISHED) {
+          log_debug("rdma_cm_event_established\n");
           conn_ev->connected_callback(conn_id, conn_ev->ctx);
       } else if (event_type == RDMA_CM_EVENT_DISCONNECTED) {
+          log_debug("rdma_cm_event_disconnected\n");
           Connection *conn = (Connection *)conn_id->context;
           if (conn->conntype == 1) {//server
             conn_ev->disconnected_callback(conn_id, conn_ev->ctx);
@@ -179,13 +199,16 @@ void *connection_event_cb(void *ctx) {
             conn_ev->disconnected_callback(conn_id, conn_ev->ctx);
           }
       } else if(event_type == RDMA_CM_EVENT_REJECTED) {//client
+           log_debug("rdma_cm_event_rejected\n");
            conn_ev->rejected_callback(conn_id, conn_ev->ctx);
       } else if(event_type == RDMA_CM_EVENT_TIMEWAIT_EXIT) {
+           log_debug("rdma_cm_event_timewait_exit\n");
            Connection *conn = (Connection *)conn_id->context;
            if (conn->conntype == 2) {//client
            } else {
            }
       } else {
+          log_debug("unknown event %d \n", event_type);
           //printf("unknown event %d \n", event_type);
       }
   }

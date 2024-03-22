@@ -6,6 +6,7 @@ int MIN_CQE_NUM = 1024;
 
 struct RdmaPool *rdmaPool = NULL;
 struct RdmaPoolConfig *rdmaPoolConfig = NULL;
+FILE *fp;
 
 struct RdmaPoolConfig* getRdmaPoolConfig() {
     rdmaPoolConfig = (struct RdmaPoolConfig*)malloc(sizeof(struct RdmaPoolConfig));
@@ -19,6 +20,7 @@ struct RdmaPoolConfig* getRdmaPoolConfig() {
     rdmaPoolConfig->responsePoolLevel = 15;
     rdmaPoolConfig->wqDepth = 32;
     rdmaPoolConfig->minCqeNum = 1024;
+    rdmaPoolConfig->enableRdmaLog = 0;
     return rdmaPoolConfig;
 }
 
@@ -37,6 +39,9 @@ void destroyRdmaPool() {
     }
     free(rdmaPoolConfig);
     free(rdmaPool);
+    if (fp) {
+        fclose(fp);
+    }
 }
 
 int initRdmaPool(struct RdmaPoolConfig* config) {
@@ -44,6 +49,18 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
         return C_ERR;
     }
     rdmaPoolConfig = config;
+
+    if (rdmaPoolConfig->enableRdmaLog == 1) {
+        log_set_level(0);
+        log_set_quiet(0);
+        fp = fopen("./c_debug.log", "ab");
+        if(fp == NULL) {
+            return C_ERR;
+        }
+        log_add_fp(fp, LOG_DEBUG);
+    }
+
+
     WQ_DEPTH = rdmaPoolConfig->wqDepth;
     MIN_CQE_NUM = rdmaPoolConfig->minCqeNum;
     rdmaPool = (struct RdmaPool*)malloc(sizeof(struct RdmaPool));

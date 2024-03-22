@@ -7,6 +7,7 @@
 #include <rdma/rdma_verbs.h>
 #include <arpa/inet.h>
 #include "rdma_proto.h"
+#include "log.h"
 
 #define UNUSED(x) (void)(x)
 #define C_OK 1
