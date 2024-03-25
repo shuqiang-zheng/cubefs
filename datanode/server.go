@@ -17,8 +17,6 @@ package datanode
 import (
 	"bytes"
 	"fmt"
-	"github.com/cubefs/cubefs/sdk/data/stream"
-	"github.com/cubefs/cubefs/util/rdma"
 	"net"
 	"net/http"
 	"os/exec"
@@ -29,6 +27,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/cubefs/cubefs/sdk/data/stream"
+	"github.com/cubefs/cubefs/util/rdma"
 
 	"errors"
 	"os"
@@ -258,6 +259,9 @@ func doShutdown(server common.Server) {
 	close(s.stopC)
 	s.space.Stop()
 	s.stopUpdateNodeInfo()
+	if isRdma {
+		s.stopRDMAService()
+	}
 	s.stopTCPService()
 	s.stopRaftServer()
 	s.stopSmuxService()
@@ -615,6 +619,15 @@ func (s *DataNode) startRDMAService() (err error) {
 			go s.serveConn(conn)
 		}
 	}(l)
+	return
+}
+
+func (s *DataNode) stopRDMAService() (err error) {
+	if s.rdmaListener != nil {
+
+		s.rdmaListener.Close()
+		log.LogDebugf("action[stopRDMAService] stop rdma service.")
+	}
 	return
 }
 
