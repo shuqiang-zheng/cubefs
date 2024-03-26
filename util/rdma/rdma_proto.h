@@ -78,6 +78,7 @@ typedef struct Response {
 typedef struct ConnectionEvent {
     struct rdma_cm_id *cm_id;
     void* ctx;
+    int close;
 
     PreConnCb preconnect_callback;
     ConnectedCb connected_callback;
@@ -134,6 +135,8 @@ typedef struct Connection {
     int lockInitialized;
     int64_t send_timeout_ns;
     int64_t recv_timeout_ns;
+    pthread_t transferThread;
+    int close;
 } Connection;
 
 struct RdmaContext {
@@ -146,6 +149,7 @@ struct RdmaContext {
     int cFd;
     int state;
     bool isReConnect;
+    pthread_t connectThread;
 };
 
 struct RdmaListener {
@@ -161,6 +165,7 @@ struct RdmaListener {
     int cFd;
     struct WaitGroup closeWg;
     int state;
+    pthread_t connectThread;
 };
 
 static inline int open_event_fd() {

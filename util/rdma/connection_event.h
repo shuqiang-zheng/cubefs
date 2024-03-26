@@ -39,6 +39,6 @@ void build_params(struct rdma_conn_param *params);
 
 void *connection_event_cb(void *ctx);
 
-
+void *cm_thread(void *ctx);
 
 #endif
