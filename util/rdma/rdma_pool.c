@@ -58,6 +58,8 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
             return C_ERR;
         }
         log_add_fp(fp, LOG_DEBUG);
+    } else {
+        log_set_quiet(1);
     }
 
     WQ_DEPTH = rdmaPoolConfig->wqDepth;
