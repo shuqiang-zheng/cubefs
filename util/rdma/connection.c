@@ -436,44 +436,60 @@ error:
     return C_ERR;
 }
 
-int AllocateOneDataBuffer(uint32_t size, int64_t *ret_size) {//buddy alloc add lock?
+int GetOneIdleBufferIndex(struct DataBuffer *buffer) {
     int i;
-    if (size > rdmaPool->memoryPool->block_size) {
-        log_debug("RDMA allocate failed. request size=%d > block size=%d", size, rdmaPool->memoryPool->block_size);
-        *ret_size = 0;
-        return -1;
+
+    for (i = buffer->current_index; i < buffer->block_num; i++) {
+        if (!buffer->used[i]) {
+            buffer->current_index = (i + 1) % buffer->block_num;
+            return i;
+        }
+    }
+    for (i = 0; i < buffer->current_index; i++) {
+        if (!buffer->used[i]) {
+            buffer->current_index = (i + 1) % buffer->block_num;
+            return i;
+        }
     }
 
-    pthread_mutex_lock(&(rdmaPool->memoryPool->lock));
-    for (i=rdmaPool->memoryPool->current_index; i < rdmaPool->memoryPool->block_num; i++) {
-        if (!rdmaPool->memoryPool->used[i]) {
-            rdmaPool->memoryPool->current_index = (i + 1) % rdmaPool->memoryPool->block_num;
-            pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
-            *ret_size = rdmaPool->memoryPool->block_size;
-            return i;
-        }
-    }
-    for (i=0; i<rdmaPool->memoryPool->current_index; i++) {
-        if (!rdmaPool->memoryPool->used[i]) {
-            rdmaPool->memoryPool->current_index = (i + 1) % rdmaPool->memoryPool->block_num;
-            pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
-            *ret_size = rdmaPool->memoryPool->block_size;
-            return i;
-        }
-    }
-    pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
-    *ret_size = 0;
     return -1;
 }
 
-void* getDataBufferAddr(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//buddy alloc add lock?
-    int64_t wait_time = 0;
+int AllocateOneDataBuffer(uint32_t size, int64_t *ret_size, struct DataBuffer *pBuf) {
     int index = -1;
 
+    pthread_mutex_lock(&(rdmaPool->memoryPool->lock));
+    index = GetOneIdleBufferIndex(pBuf);
+    pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
+
+    if (index >= 0 && index < pBuf->block_num) {
+        *ret_size = pBuf->block_size;
+        return index;
+    } else {
+        *ret_size = 0;
+        return -1;
+    }
+}
+
+void* getDataBufferAddr(uint32_t size, int64_t timeout_us,int64_t *ret_size) {
+    int64_t wait_time = 0;
+    int index = -1;
+    struct DataBuffer *pBuf = NULL;
+
+    if (size > rdmaPool->memoryPool->buffer_1m.block_size) {
+        log_debug("RDMA allocate address failed. request size=%d > block size=%d", size, rdmaPool->memoryPool->buffer_1m.block_size);
+        *ret_size = 0;
+        return NULL;
+    } else if (size <= rdmaPool->memoryPool->buffer_128k.block_size) {
+        pBuf = &(rdmaPool->memoryPool->buffer_128k);
+    } else {
+        pBuf = &(rdmaPool->memoryPool->buffer_1m);
+    }
+
     do {
-        index = AllocateOneDataBuffer(size, ret_size);
+        index = AllocateOneDataBuffer(size, ret_size, pBuf);
         if (index >= 0) {
-            return rdmaPool->memoryPool->mem[index];
+            return pBuf->mem[index];
         }
 
         wait_time += 1000;
@@ -485,12 +501,23 @@ void* getDataBufferAddr(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//
     } while(1);
 }
 
-int getDataBufferIndex(uint32_t size, int64_t timeout_us,int64_t *ret_size) {//buddy alloc add lock?
+int getDataBufferIndex(uint32_t size, int64_t timeout_us,int64_t *ret_size, struct DataBuffer *pBuf) {
     int64_t wait_time = 0;
     int index = -1;
 
+    if (size > rdmaPool->memoryPool->buffer_1m.block_size) {
+        log_debug("RDMA allocate index failed. request size=%d > block size=%d", size, rdmaPool->memoryPool->buffer_1m.block_size);
+        *ret_size = 0;
+        pBuf = NULL;
+        return -1;
+    } else if (size <= rdmaPool->memoryPool->buffer_128k.block_size) {
+        pBuf = &(rdmaPool->memoryPool->buffer_128k);
+    } else {
+        pBuf = &(rdmaPool->memoryPool->buffer_1m);
+    }
+
     do {
-        index = AllocateOneDataBuffer(size, ret_size);
+        index = AllocateOneDataBuffer(size, ret_size, pBuf);
         if (index >= 0) {
             return index;
         }
@@ -635,13 +662,13 @@ void setRecvTimeoutUs(Connection* conn, int64_t timeout_us) {
     return;
 }
 
-int MemoryPoolAddrToIndex(void *addr) {
+int MemoryPool_buffer_addr_to_index(void *addr, struct DataBuffer *pBuf) {
     int i;
     int index = -1;
 
     // Find the index of the buffer in the pool
-    for (i = 0; i < rdmaPool->memoryPool->block_num; i++) {
-        if (rdmaPool->memoryPool->mem[i] == addr) {
+    for (i = 0; i < pBuf->block_num; i++) {
+        if (pBuf->mem[i] == addr) {
             index = i;
             break;
         }
@@ -650,16 +677,36 @@ int MemoryPoolAddrToIndex(void *addr) {
     return index;
 }
 
-int releaseDataBuffer(void* buff) {
+int MemoryPoolAddrToIndex(void *addr, struct DataBuffer *pBuf) {
     int index = -1;
 
-    index = MemoryPoolAddrToIndex(buff);
-    if (index == -1) {
+    pBuf = &(rdmaPool->memoryPool->buffer_128k);
+    index = MemoryPool_buffer_addr_to_index(addr, pBuf);
+    if (index >= 0) {
+        return index;
+    }
+
+    pBuf = &(rdmaPool->memoryPool->buffer_1m);
+    index = MemoryPool_buffer_addr_to_index(addr, pBuf);
+    if (index >= 0) {
+        return index;
+    }
+
+    pBuf = NULL;
+    return -1;
+}
+
+int releaseDataBuffer(void* buff) {
+    int index = -1;
+    struct DataBuffer *pBuf = NULL;
+
+    index = MemoryPoolAddrToIndex(buff, pBuf);
+    if (index == -1 || pBuf == NULL) {
         return C_ERR;
     }
 
     pthread_mutex_lock(&(rdmaPool->memoryPool->lock));
-    rdmaPool->memoryPool->used[index] = false;
+    pBuf->used[index] = false;
     pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
 
     return C_OK;
@@ -691,12 +738,14 @@ int releaseHeaderBuffer(Connection* conn, void* buff) {
 
 int connAppWrite(Connection *conn, void* buff, void *headerCtx, int32_t len) {
     int index = -1;
+    struct DataBuffer *data_buffer = NULL;
+
     if (conn->state != CONN_STATE_CONNECTED) { //在使用之前需要判断连接的状态
         //printf("conn state is not connected: state(%d)\n",conn->state);
         return C_ERR;
     }
 
-    index = MemoryPoolAddrToIndex(buff);
+    index = MemoryPoolAddrToIndex(buff, data_buffer);
     if (index < 0 ) {
         log_debug("Invalid buffer address: 0x%p\n", buff);
         return C_ERR;
@@ -704,7 +753,7 @@ int connAppWrite(Connection *conn, void* buff, void *headerCtx, int32_t len) {
     Header* header = (Header*)headerCtx;
     header->RdmaAddr = htonu64((uint64_t)buff);
     header->RdmaLength = htonl(len);
-    header->RdmaKey = htonl(rdmaPool->memoryPool->mr[index]->rkey);
+    header->RdmaKey = htonl(data_buffer->mr[index]->rkey);
     int ret = connRdmaSendHeader(conn, header, len);
     if (ret==C_ERR) {
         //printf("app write failed\n");
@@ -744,6 +793,7 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
     uint32_t remote_key = ntohl(header->RdmaKey);
     int64_t now = get_time_ns();
     int64_t dead_line = 0;
+    struct DataBuffer *pBuf = NULL;
 
     if(conn->recv_timeout_ns == -1 || conn->recv_timeout_ns == 0) {
         dead_line = -1;
@@ -756,18 +806,18 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
         return C_ERR;
     }
 
-    index = getDataBufferIndex(remote_length, 2000000, &ret_size);
-    if (index < 0 || index >= rdmaPool->memoryPool->block_num || ret_size < remote_length) {
+    index = getDataBufferIndex(remote_length, 2000000, &ret_size, pBuf);
+    if (index < 0 || pBuf == NULL) {
         return C_ERR;
     }
 
     //void* addr = conn->pool->original_mem + index * rdmaPoolConfig->memBlockSize;
-    entry->data_buff = rdmaPool->memoryPool->mem[index];
+    entry->data_buff = pBuf->mem[index];
     entry->data_len = remote_length;
     entry->isResponse = false;
     int ret;
-    sge.addr = (uint64_t)rdmaPool->memoryPool->mem[index];
-    sge.lkey = rdmaPool->memoryPool->mr[index]->lkey;
+    sge.addr = (uint64_t)pBuf->mem[index];
+    sge.lkey = pBuf->mr[index]->lkey;
     sge.length = remote_length;
     send_wr.sg_list = &sge;
     send_wr.num_sge = 1;

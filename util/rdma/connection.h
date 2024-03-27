@@ -56,7 +56,6 @@ int rdmaPostRecvHeader(Connection *conn, void *headerCtx);
 int rdmaPostRecvResponse(Connection *conn, void *responseCtx);
 
 void* getDataBufferAddr(uint32_t size, int64_t timeout_us,int64_t *ret_size);
-int getDataBufferIndex(uint32_t size, int64_t timeout_us,int64_t *ret_size);
 
 void* getResponseBuffer(Connection *conn, int64_t timeout_us, int32_t *ret_size);
 

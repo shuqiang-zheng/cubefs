@@ -20,63 +20,104 @@ struct ibv_pd* mem_pool_alloc_pd() {
     return pd;
 }
 
-MemoryPool* InitMemoryPool(int block_num) {
-    struct ibv_pd* pd = NULL;
-    struct ibv_mr* mr = NULL;
-    int i = 0;
+int MemoryPool_init_data_buffer(struct DataBuffer *buffer, struct ibv_pd* pd) {
     int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+    int i = 0;
+
+    buffer->mem = malloc(sizeof(void*) * buffer->block_num);
+    if (buffer->mem == NULL) {
+        return -1;
+    }
+    memset(buffer->mem, 0, sizeof(void*) * buffer->block_num);
+    for (i = 0; i< buffer->block_num; i++) {
+        buffer->mem[i] = malloc(buffer->block_size);
+        if (buffer->mem[i] == NULL) {
+            return -1;
+        }
+    }
+
+    buffer->used = malloc(sizeof(int8_t) * buffer->block_num);
+    if (buffer->used == NULL) {
+        return -1;
+    }
+    memset(buffer->used, 0, buffer->block_num * sizeof(int8_t));
+
+    buffer->mr = malloc(sizeof(struct ibv_mr*) * buffer->block_num);
+    if (buffer->mr == NULL) {
+        return -1;
+    }
+    memset(buffer->mr, 0, sizeof(struct ibv_mr*) * buffer->block_num);
+    for (i = 0; i< buffer->block_num; i++) {
+        buffer->mr[i] = ibv_reg_mr(pd, buffer->mem[i], buffer->block_size, access);
+        if (buffer->mr[i] == NULL) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+MemoryPool* InitMemoryPool(int block_1M_num, int block_128K_num) {
+    struct ibv_pd* pd = NULL;
+    int ret = 0;
 
     MemoryPool * pool = (MemoryPool*)malloc(sizeof(MemoryPool));
     if (pool == NULL) {
         return NULL;
     }
-    pool->block_num = block_num;
-    pool->block_size = MEMORY_BLOCK_SIZE;
-    pool->current_index = 0;
+    memset(pool, 0, sizeof(MemoryPool));
     pthread_mutex_init(&(pool->lock), 0);
-
-    pool->mem = malloc(sizeof(void*) * block_num);
-    if (pool->mem == NULL) {
-        CloseMemoryPool(pool);
-        return NULL;
-    }
-    memset(pool->mem, 0, sizeof(void*) * block_num);
-    for (i = 0; i< block_num; i++) {
-        pool->mem[i] = malloc(MEMORY_BLOCK_SIZE);
-        if (pool->mem[i] == NULL) {
-            CloseMemoryPool(pool);
-            return NULL;
-        }
-    }
-
-    pool->used = malloc(sizeof(int8_t) * block_num);
-    if (pool->used == NULL) {
-        CloseMemoryPool(pool);
-        return NULL;
-    }
-    memset(pool->used, 0, block_num * sizeof(int8_t));
 
     pd = mem_pool_alloc_pd();
     if(!pd) {
+        CloseMemoryPool(pool);
         return NULL;
     }
     pool->pd = pd;
 
-    pool->mr = malloc(sizeof(struct ibv_mr*) * block_num);
-    if (pool->mr == NULL) {
+    pool->buffer_1m.block_num = block_1M_num;
+    pool->buffer_1m.block_size = MEMORY_BLOCK_SIZE_1M;
+    ret = MemoryPool_init_data_buffer(&(pool->buffer_1m), pd);
+    if (ret != 0) {
         CloseMemoryPool(pool);
         return NULL;
     }
-    memset(pool->mr, 0, sizeof(struct ibv_mr*) * block_num);
-    for (i = 0; i< block_num; i++) {
-        pool->mr[i] = ibv_reg_mr(pd, pool->mem[i], MEMORY_BLOCK_SIZE, access);
-        if (pool->mr[i] == NULL) {
-            CloseMemoryPool(pool);
-            return NULL;
-        }
+
+    pool->buffer_128k.block_num = block_128K_num;
+    pool->buffer_128k.block_size = MEMORY_BLOCK_SIZE_128K;
+    ret = MemoryPool_init_data_buffer(&(pool->buffer_128k), pd);
+    if (ret != 0) {
+        CloseMemoryPool(pool);
+        return NULL;
     }
 
     return pool;
+}
+
+void MemoryPool_free_data_buffer(struct DataBuffer *buffer) {
+    int i = 0;
+
+    if (buffer->mr != NULL) {
+        for (i = 0; i < buffer->block_num; i++) {
+            if (buffer->mr[i] != NULL) {
+                ibv_dereg_mr(buffer->mr[i]);
+            }
+        }
+        free(buffer->mr);
+    }
+
+    if (buffer->used != NULL) {
+        free(buffer->used);
+    }
+
+    if (buffer->mem != NULL) {
+        for (i = 0; i < buffer->block_num; i++) {
+            if (buffer->mem[i] != NULL) {
+                free(buffer->mem[i]);
+            }
+        }
+        free(buffer->mem);
+    }
 }
 
 void CloseMemoryPool(MemoryPool* pool) {
@@ -86,30 +127,11 @@ void CloseMemoryPool(MemoryPool* pool) {
         return;
     }
 
-    if (pool->mr != NULL) {
-        for (i = 0; i< pool->block_num; i++) {
-            if (pool->mr[i] != NULL) {
-                ibv_dereg_mr(pool->mr[i]);
-            }
-        }
-        free(pool->mr);
-    }
+    MemoryPool_free_data_buffer(&(pool->buffer_1m));
+    MemoryPool_free_data_buffer(&(pool->buffer_128k));
 
     if (pool->pd != NULL) {
         ibv_dealloc_pd(pool->pd);
-    }
-
-    if (pool->used != NULL) {
-        free(pool->used);
-    }
-
-    if (pool->mem != NULL) {
-        for (i = 0; i< pool->block_num; i++) {
-            if (pool->mem[i] != NULL) {
-                free(pool->mem[i]);
-            }
-        }
-        free(pool->mem);
     }
 
     pthread_mutex_destroy(&(pool->lock));

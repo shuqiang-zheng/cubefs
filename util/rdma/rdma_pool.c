@@ -64,7 +64,7 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
     MIN_CQE_NUM = rdmaPoolConfig->minCqeNum;
     rdmaPool = (struct RdmaPool*)malloc(sizeof(struct RdmaPool));
     memset(rdmaPool, 0, sizeof(struct RdmaPool));
-    rdmaPool->memoryPool = InitMemoryPool(rdmaPoolConfig->memBlockNum);
+    rdmaPool->memoryPool = InitMemoryPool(rdmaPoolConfig->memBlockNum, 64);
     if(rdmaPool->memoryPool == NULL) {
         goto error;
     }
