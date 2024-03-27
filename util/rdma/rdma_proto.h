@@ -115,7 +115,6 @@ typedef struct Connection {
     struct ibv_pd *pd;
     struct ibv_comp_channel *comp_channel;
     struct ibv_cq *cq;
-    struct ibv_mr *mr;
     MemoryPool *pool;
     ObjectPool* header_pool;
     ObjectPool* response_pool;

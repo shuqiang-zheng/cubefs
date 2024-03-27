@@ -7,14 +7,14 @@
 #include <unistd.h>
 #include <pthread.h>
 
-static int MEMORY_BLOCK_SIZE   = 128;
-static int MEMORY_BLOCK_COUNT   = 1280;
+// memory block size is 1MB
+static int MEMORY_BLOCK_SIZE   = 1048576;
+static int MEMORY_BLOCK_COUNT   = 1024;
 
 typedef struct MemoryPool {
-    void*  original_mem;
-    int64_t size;
+    void** mem;
     struct ibv_pd* pd;
-    struct ibv_mr* mr;
+    struct ibv_mr** mr;
     pthread_mutex_t lock;
     int8_t *used;
     int current_index;
@@ -22,8 +22,7 @@ typedef struct MemoryPool {
     int block_size;
 } MemoryPool;
 
-MemoryPool* InitMemoryPool(int block_num, int block_size);
-
+MemoryPool* InitMemoryPool(int block_num);
 void CloseMemoryPool(MemoryPool* pool);
 
 #endif

@@ -327,7 +327,7 @@ func (conn *Connection) Close() (err error) {
 func GetDataBuffer(len uint32, timeout_us int) ([]byte, error) {
 	var bufferSize C.int64_t
 
-	dataPtr := C.getDataBuffer(C.uint32_t(len), C.int64_t(timeout_us), &bufferSize)
+	dataPtr := C.getDataBufferAddr(C.uint32_t(len), C.int64_t(timeout_us), &bufferSize)
 	if bufferSize == 0 {
 		return nil, fmt.Errorf("get data buffer timeout")
 	}
@@ -339,7 +339,9 @@ func GetDataBuffer(len uint32, timeout_us int) ([]byte, error) {
 }
 
 func ReleaseDataBuffer(dataBuffer []byte) error {
-	if int(C.releaseDataBuffer(unsafe.Pointer(&dataBuffer[0]), C.int32_t(len(dataBuffer)))) == 0 {
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&dataBuffer))
+
+	if int(C.releaseDataBuffer(unsafe.Pointer(hdr.Data))) == 0 {
 		return fmt.Errorf("release data buffer(%p) failed", dataBuffer)
 	}
 	return nil

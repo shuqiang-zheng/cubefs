@@ -60,12 +60,11 @@ int initRdmaPool(struct RdmaPoolConfig* config) {
         log_add_fp(fp, LOG_DEBUG);
     }
 
-
     WQ_DEPTH = rdmaPoolConfig->wqDepth;
     MIN_CQE_NUM = rdmaPoolConfig->minCqeNum;
     rdmaPool = (struct RdmaPool*)malloc(sizeof(struct RdmaPool));
     memset(rdmaPool, 0, sizeof(struct RdmaPool));
-    rdmaPool->memoryPool = InitMemoryPool(rdmaPoolConfig->memBlockNum, rdmaPoolConfig->memBlockSize);
+    rdmaPool->memoryPool = InitMemoryPool(rdmaPoolConfig->memBlockNum);
     if(rdmaPool->memoryPool == NULL) {
         goto error;
     }

@@ -1,7 +1,7 @@
 #include "memory_pool.h"
 
 
-struct ibv_pd* alloc_pd() {
+struct ibv_pd* mem_pool_alloc_pd() {
     struct ibv_device **dev_list = ibv_get_device_list(NULL);
     if(dev_list == NULL) {
         return NULL;
@@ -20,62 +20,98 @@ struct ibv_pd* alloc_pd() {
     return pd;
 }
 
-void dealloc_pd(struct ibv_pd* pd) {
-    if(pd) {
-        ibv_dealloc_pd(pd);
-    }
-    return;
-}
-
-struct ibv_mr* regist_mr(MemoryPool* pool, struct ibv_pd* pd) {
-    int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
-    struct ibv_mr *mr = ibv_reg_mr(pd, pool->original_mem, pool->size, access);
-    if (!mr) {
-        //printf("RDMA: reg mr for recv data buffer failed");
-        return NULL;
-    }
-    return mr;
-}
-
-void dereg_mr(struct ibv_mr* mr) {
-    if (mr) {
-        ibv_dereg_mr(mr);
-    }
-    return;
-}
-
-MemoryPool* InitMemoryPool(int block_num, int block_size) {
+MemoryPool* InitMemoryPool(int block_num) {
     struct ibv_pd* pd = NULL;
     struct ibv_mr* mr = NULL;
+    int i = 0;
+    int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
 
     MemoryPool * pool = (MemoryPool*)malloc(sizeof(MemoryPool));
-    pool->size = (int64_t)block_num * (int64_t)block_size;
-    posix_memalign((void**)(&(pool->original_mem)), sysconf(_SC_PAGESIZE), pool->size);
-    pool->used = malloc(block_num * sizeof(int8_t));
-    memset(pool->used, 0, block_num * sizeof(int8_t));
+    if (pool == NULL) {
+        return NULL;
+    }
     pool->block_num = block_num;
-    pool->block_size = block_size;
+    pool->block_size = MEMORY_BLOCK_SIZE;
     pool->current_index = 0;
     pthread_mutex_init(&(pool->lock), 0);
-    pd = alloc_pd();
+
+    pool->mem = malloc(sizeof(void*) * block_num);
+    if (pool->mem == NULL) {
+        CloseMemoryPool(pool);
+        return NULL;
+    }
+    memset(pool->mem, 0, sizeof(void*) * block_num);
+    for (i = 0; i< block_num; i++) {
+        pool->mem[i] = malloc(MEMORY_BLOCK_SIZE);
+        if (pool->mem[i] == NULL) {
+            CloseMemoryPool(pool);
+            return NULL;
+        }
+    }
+
+    pool->used = malloc(sizeof(int8_t) * block_num);
+    if (pool->used == NULL) {
+        CloseMemoryPool(pool);
+        return NULL;
+    }
+    memset(pool->used, 0, block_num * sizeof(int8_t));
+
+    pd = mem_pool_alloc_pd();
     if(!pd) {
         return NULL;
     }
     pool->pd = pd;
-    mr = regist_mr(pool, pd);
-    if(!mr) {
+
+    pool->mr = malloc(sizeof(struct ibv_mr*) * block_num);
+    if (pool->mr == NULL) {
+        CloseMemoryPool(pool);
         return NULL;
     }
-    pool->mr = mr;
+    memset(pool->mr, 0, sizeof(struct ibv_mr*) * block_num);
+    for (i = 0; i< block_num; i++) {
+        pool->mr[i] = ibv_reg_mr(pd, pool->mem[i], MEMORY_BLOCK_SIZE, access);
+        if (pool->mr[i] == NULL) {
+            CloseMemoryPool(pool);
+            return NULL;
+        }
+    }
+
     return pool;
 }
 
 void CloseMemoryPool(MemoryPool* pool) {
-    dealloc_pd(pool->pd);
-    dereg_mr(pool->mr);
-    free(pool->original_mem);
-    free(pool->used);
+    int i = 0;
+
+    if (pool == NULL) {
+        return;
+    }
+
+    if (pool->mr != NULL) {
+        for (i = 0; i< pool->block_num; i++) {
+            if (pool->mr[i] != NULL) {
+                ibv_dereg_mr(pool->mr[i]);
+            }
+        }
+        free(pool->mr);
+    }
+
+    if (pool->pd != NULL) {
+        ibv_dealloc_pd(pool->pd);
+    }
+
+    if (pool->used != NULL) {
+        free(pool->used);
+    }
+
+    if (pool->mem != NULL) {
+        for (i = 0; i< pool->block_num; i++) {
+            if (pool->mem[i] != NULL) {
+                free(pool->mem[i]);
+            }
+        }
+        free(pool->mem);
+    }
+
     pthread_mutex_destroy(&(pool->lock));
     free(pool);
 }
-
