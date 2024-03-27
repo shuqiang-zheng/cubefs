@@ -462,6 +462,15 @@ func (eh *ExtentHandler) cleanup() (err error) {
 			StreamConnPool.PutConnect(conn, false)
 		}
 	}
+	if eh.rdmaConn != nil {
+		rdmaConn := eh.rdmaConn
+		eh.rdmaConn = nil
+		if status := eh.getStatus(); status >= ExtentStatusRecovery {
+			StreamRdmaConnPool.PutRdmaConn(rdmaConn, true)
+		} else {
+			StreamRdmaConnPool.PutRdmaConn(rdmaConn, false)
+		}
+	}
 	return
 }
 
