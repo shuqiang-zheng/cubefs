@@ -659,36 +659,50 @@ int MemoryPool_buffer_addr_to_index(void *addr, struct DataBuffer *pBuf) {
     return index;
 }
 
-int MemoryPoolAddrToIndex(void *addr, struct DataBuffer *pBuf) {
+struct MemoryPoolAddrInfo {
+    int index;
+    struct DataBuffer *pBuf;
+};
+
+struct MemoryPoolAddrInfo MemoryPoolAddrToIndex(void *addr) {
+    struct MemoryPoolAddrInfo ret;
     int index = -1;
 
-    pBuf = &(rdmaPool->memoryPool->buffer_128k);
-    index = MemoryPool_buffer_addr_to_index(addr, pBuf);
-    if (index >= 0) {
-        return index;
+    ret.index = -1;
+    ret.pBuf = NULL;
+
+    if (rdmaPool->memoryPool == NULL) {
+        return ret;
     }
 
-    pBuf = &(rdmaPool->memoryPool->buffer_1m);
-    index = MemoryPool_buffer_addr_to_index(addr, pBuf);
+    index = MemoryPool_buffer_addr_to_index(addr, &(rdmaPool->memoryPool->buffer_128k));
     if (index >= 0) {
-        return index;
+        ret.index = index;
+        ret.pBuf = &(rdmaPool->memoryPool->buffer_128k);
+        return ret;
     }
 
-    pBuf = NULL;
-    return -1;
+    index = MemoryPool_buffer_addr_to_index(addr, &(rdmaPool->memoryPool->buffer_1m));
+    if (index >= 0) {
+        ret.index = index;
+        ret.pBuf = &(rdmaPool->memoryPool->buffer_1m);
+        return ret;
+    }
+
+    return ret;
 }
 
 int releaseDataBuffer(void* buff) {
     int index = -1;
-    struct DataBuffer *pBuf = NULL;
+    struct MemoryPoolAddrInfo ret;
 
-    index = MemoryPoolAddrToIndex(buff, pBuf);
-    if (index == -1 || pBuf == NULL) {
+    ret = MemoryPoolAddrToIndex(buff);
+    if (ret.index == -1 || ret.pBuf == NULL) {
         return C_ERR;
     }
 
     pthread_mutex_lock(&(rdmaPool->memoryPool->lock));
-    pBuf->used[index] = false;
+    ret.pBuf->used[ret.index] = false;
     pthread_mutex_unlock(&(rdmaPool->memoryPool->lock));
 
     return C_OK;
@@ -719,23 +733,22 @@ int releaseHeaderBuffer(Connection* conn, void* buff) {
 }
 
 int connAppWrite(Connection *conn, void* buff, void *headerCtx, int32_t len) {
-    int index = -1;
-    struct DataBuffer *data_buffer = NULL;
+    struct MemoryPoolAddrInfo addr_info;
 
     if (conn->state != CONN_STATE_CONNECTED) { //在使用之前需要判断连接的状态
         //printf("conn state is not connected: state(%d)\n",conn->state);
         return C_ERR;
     }
 
-    index = MemoryPoolAddrToIndex(buff, data_buffer);
-    if (index < 0 ) {
+    addr_info = MemoryPoolAddrToIndex(buff);
+    if (addr_info.index < 0 || addr_info.pBuf == NULL) {
         log_debug("Invalid buffer address: 0x%p\n", buff);
         return C_ERR;
     }
     Header* header = (Header*)headerCtx;
     header->RdmaAddr = htonu64((uint64_t)buff);
     header->RdmaLength = htonl(len);
-    header->RdmaKey = htonl(data_buffer->mr[index]->rkey);
+    header->RdmaKey = htonl(addr_info.pBuf->mr[addr_info.index]->rkey);
     int ret = connRdmaSendHeader(conn, header, len);
     if (ret==C_ERR) {
         //printf("app write failed\n");
