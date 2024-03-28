@@ -283,6 +283,8 @@ func (s *DataNode) parseConfig(cfg *config.Config) (err error) {
 		rdmaServerPort = cfg.GetString("rdmaPort")
 		util.Config.MemBlockNum = int(cfg.GetInt64WithDefault("rdmaMemBlockNum", 8*1024*5))
 		util.Config.MemBlockSize = int(cfg.GetInt64WithDefault("rdmaMemBlockSize", 65536*2))
+		util.Config.Mem1MBlockNum = int(cfg.GetInt64WithDefault("rdmaMem1MBlockNum", 100))
+		util.Config.Mem128KBlockNum = int(cfg.GetInt64WithDefault("rdmaMem128KBlockNum", 1000))
 		util.Config.MemPoolLevel = int(cfg.GetInt64WithDefault("rdmaMemPoolLevel", 18))
 
 		util.Config.HeaderBlockNum = int(cfg.GetInt64WithDefault("rdmaHeaderBlockNum", 32*1024))

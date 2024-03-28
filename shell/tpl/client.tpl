@@ -6,6 +6,8 @@
   "enableRdma": "true",
   "rdmaMemBlockNum": "40960",
   "rdmaMemBlockSize": "131072",
+  "rdmaMem1MBlockNum": "10",
+  "rdmaMem128KBlockNum": "100",
   "rdmaMemPoolLevel": "18",
   "rdmaHeaderBlockNum": "32768",
   "rdmaHeaderPoolLevel": "15",

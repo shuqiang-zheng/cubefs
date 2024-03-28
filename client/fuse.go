@@ -23,7 +23,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/cubefs/cubefs/sdk/data/stream"
 	"io/ioutil"
 	syslog "log"
 	"net"
@@ -38,6 +37,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cubefs/cubefs/sdk/data/stream"
 
 	"github.com/cubefs/cubefs/blockcache/bcache"
 	"github.com/cubefs/cubefs/util/auditlog"
@@ -288,6 +289,8 @@ func main() {
 	if stream.IsRdma {
 		util.Config.MemBlockNum = int(cfg.GetInt64WithDefault("rdmaMemBlockNum", 8*1024*5))
 		util.Config.MemBlockSize = int(cfg.GetInt64WithDefault("rdmaMemBlockSize", 65536*2))
+		util.Config.Mem1MBlockNum = int(cfg.GetInt64WithDefault("rdmaMem1MBlockNum", 10))
+		util.Config.Mem128KBlockNum = int(cfg.GetInt64WithDefault("rdmaMem128KBlockNum", 100))
 		util.Config.MemPoolLevel = int(cfg.GetInt64WithDefault("rdmaMemPoolLevel", 18))
 
 		util.Config.HeaderBlockNum = int(cfg.GetInt64WithDefault("rdmaHeaderBlockNum", 32*1024))

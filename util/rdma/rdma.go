@@ -485,6 +485,8 @@ func (conn *Connection) RdmaPostRecvResponse(responseBuffer []byte) error {
 type RdmaPoolConfig struct {
 	MemBlockNum       int
 	MemBlockSize      int
+	Mem1MBlockNum     int
+	Mem128KBlockNum   int
 	MemPoolLevel      int
 	HeaderBlockNum    int
 	HeaderPoolLevel   int
@@ -507,6 +509,12 @@ func parseRdmaPoolConfig(gCfg *RdmaPoolConfig, cCfg *C.struct_RdmaPoolConfig) er
 	}
 	if gCfg.MemBlockSize != 0 {
 		cCfg.memBlockSize = C.int(gCfg.MemBlockSize)
+	}
+	if gCfg.Mem1MBlockNum != 0 {
+		cCfg.mem1MBlockNum = C.int(gCfg.Mem1MBlockNum)
+	}
+	if gCfg.Mem128KBlockNum != 0 {
+		cCfg.mem128KBlockNum = C.int(gCfg.Mem128KBlockNum)
 	}
 	if gCfg.MemPoolLevel != 0 {
 		cCfg.memPoolLevel = C.int(gCfg.MemPoolLevel)

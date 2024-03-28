@@ -16,6 +16,8 @@ struct RdmaPool {
 struct RdmaPoolConfig {
     int memBlockNum;
     int memBlockSize;
+    int mem1MBlockNum;
+    int mem128KBlockNum;
     int memPoolLevel;
     
     int headerBlockNum;
