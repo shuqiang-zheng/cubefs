@@ -1,5 +1,10 @@
 #include "connection.h"
 
+struct MemoryPoolAddrInfo {
+    int index;
+    struct DataBuffer *pBuf;
+};
+
 int64_t get_time_ns() {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -487,31 +492,34 @@ void* getDataBufferAddr(uint32_t size, int64_t timeout_us,int64_t *ret_size) {
     } while(1);
 }
 
-int getDataBufferIndex(uint32_t size, int64_t timeout_us,int64_t *ret_size, struct DataBuffer *pBuf) {
+struct MemoryPoolAddrInfo getDataBufferIndex(uint32_t size, int64_t timeout_us,int64_t *ret_size) {
     int64_t wait_time = 0;
-    int index = -1;
+    struct MemoryPoolAddrInfo ret;
 
     if (size > rdmaPool->memoryPool->buffer_1m.block_size) {
         log_debug("RDMA allocate index failed. request size=%d > block size=%d", size, rdmaPool->memoryPool->buffer_1m.block_size);
         *ret_size = 0;
-        pBuf = NULL;
-        return -1;
+        ret.index = -1;
+        ret.pBuf = NULL;
+        return ret;
     } else if (size <= rdmaPool->memoryPool->buffer_128k.block_size) {
-        pBuf = &(rdmaPool->memoryPool->buffer_128k);
+        ret.pBuf = &(rdmaPool->memoryPool->buffer_128k);
     } else {
-        pBuf = &(rdmaPool->memoryPool->buffer_1m);
+        ret.pBuf = &(rdmaPool->memoryPool->buffer_1m);
     }
 
     do {
-        index = AllocateOneDataBuffer(size, ret_size, pBuf);
-        if (index >= 0) {
-            return index;
+        ret.index = AllocateOneDataBuffer(size, ret_size, ret.pBuf);
+        if (ret.index >= 0) {
+            return ret;
         }
 
         wait_time += 1000;
         if (timeout_us > 0 && wait_time > timeout_us) {
             *ret_size = 0;
-            return -1;
+            ret.index = -1;
+            ret.pBuf = NULL;
+            return ret;
         }
         usleep(1000);
     } while(1);
@@ -659,11 +667,6 @@ int MemoryPool_buffer_addr_to_index(void *addr, struct DataBuffer *pBuf) {
     return index;
 }
 
-struct MemoryPoolAddrInfo {
-    int index;
-    struct DataBuffer *pBuf;
-};
-
 struct MemoryPoolAddrInfo MemoryPoolAddrToIndex(void *addr) {
     struct MemoryPoolAddrInfo ret;
     int index = -1;
@@ -782,13 +785,12 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
     struct ibv_send_wr send_wr, *bad_wr;
     struct ibv_sge sge;
     int64_t ret_size = 0;
-    int index = 0;
     char* remote_addr = (char *)ntohu64(header->RdmaAddr);
     uint32_t remote_length = ntohl(header->RdmaLength);
     uint32_t remote_key = ntohl(header->RdmaKey);
     int64_t now = get_time_ns();
     int64_t dead_line = 0;
-    struct DataBuffer *pBuf = NULL;
+    struct MemoryPoolAddrInfo addr_info;
 
     if(conn->recv_timeout_ns == -1 || conn->recv_timeout_ns == 0) {
         dead_line = -1;
@@ -801,18 +803,18 @@ int RdmaRead(Connection *conn, Header *header, MemoryEntry* entry) {//, int64_t 
         return C_ERR;
     }
 
-    index = getDataBufferIndex(remote_length, 2000000, &ret_size, pBuf);
-    if (index < 0 || pBuf == NULL) {
+    addr_info = getDataBufferIndex(remote_length, 2000000, &ret_size);
+    if (addr_info.index < 0 || addr_info.pBuf == NULL) {
         return C_ERR;
     }
 
     //void* addr = conn->pool->original_mem + index * rdmaPoolConfig->memBlockSize;
-    entry->data_buff = pBuf->mem[index];
+    entry->data_buff = addr_info.pBuf->mem[addr_info.index];
     entry->data_len = remote_length;
     entry->isResponse = false;
     int ret;
-    sge.addr = (uint64_t)pBuf->mem[index];
-    sge.lkey = pBuf->mr[index]->lkey;
+    sge.addr = (uint64_t)addr_info.pBuf->mem[addr_info.index];
+    sge.lkey = addr_info.pBuf->mr[addr_info.index]->lkey;
     sge.length = remote_length;
     send_wr.sg_list = &sge;
     send_wr.num_sge = 1;
